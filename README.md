@@ -1,12 +1,22 @@
 # Wii U Transfer Tools
 
+<p align="center">
+  <img src="Imagenes/3_WiiU_Transfer_Tools_logo.png" alt="Wii U Transfer Tools" width="420">
+</p>
+
 Desarrollado por **El Diuca**.
 
 **Versión 1.0.0** — aplicación de Wii U y programa de PC.
 
-Sistema en **tema oscuro** de transferencia e instalación de paquetes WUP (con soporte de **selección múltiple en cola**) por red local o pendrive USB FAT32 hacia tu consola Wii U con Aroma.
+**Wii U Transfer Tools** permite transferir e instalar paquetes WUP en consolas Wii U con Aroma, desde el programa de PC por red local o directamente desde un pendrive USB FAT32. Incluye **selección múltiple en cola** y una interfaz unificada para la consola y Windows.
 
 Este proyecto es **software de código abierto bajo la licencia MIT**. Consulta [LICENSE](LICENSE) para conocer los términos de uso, modificación y redistribución.
+
+## Así se ve Wii U Transfer Tools
+
+| En la consola Wii U | Programa de PC para Windows |
+|:---:|:---:|
+| ![Wii U Transfer Tools en TV y GamePad](Imagenes/1_WiiU_Transfer_Tools_consola.png) | ![Servidor de Wii U Transfer Tools para PC](Imagenes/2_WiiU_Transfer_Tools_PC.png) |
 
 ## Estructura de carpetas
 
