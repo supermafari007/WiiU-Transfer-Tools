@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+
+/PC/packages/
+
+/Wii U/frontend/build/
+/Wii U/frontend/WiiU_Transfer.elf
+/Wii U/frontend/WiiU_Transfer.rpx
+/Wii U/frontend/WiiU_Transfer.wuhb
+
+/3 - Codigo fuente/
+/INSTRUCCIONES.txt
+
+Thumbs.db
+Desktop.ini
