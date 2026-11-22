@@ -9,12 +9,13 @@ BUILD         := build
 SOURCES       := source
 INCLUDES      := ../protocol
 
-APP_NAME      := Wii U Transfer
-APP_SHORTNAME := Wii U Transfer
-APP_AUTHOR    := 3Dii-U
+APP_NAME      := Wii U Transfer Tools
+APP_SHORTNAME := Wii U Transfer Tools
+APP_AUTHOR    := El Diuca
 APP_ICON      := $(CURDIR)/assets/icon.png
 APP_TV_SPLASH := $(CURDIR)/assets/tv.png
 APP_DRC_SPLASH:= $(CURDIR)/assets/drc.png
+WUHB_EXTRA    := --content=$(CURDIR)/content
 
 ARCH     := -mcpu=750 -meabi -mhard-float
 CXXFLAGS := -g -O2 -Wall $(ARCH) $(DEFINES) -std=gnu++17 -ffunction-sections -fdata-sections

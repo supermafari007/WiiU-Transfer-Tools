@@ -1,0 +1,9 @@
+{
+  "version": "2.0.0",
+  "release_date": "2026-11-22",
+  "repo_url": "https://github.com/supermafari007/WiiU-Transfer-Tools",
+  "wiiu_wuhb_url": "https://raw.githubusercontent.com/supermafari007/WiiU-Transfer-Tools/main/Wii%20U/WiiU_Transfer.wuhb",
+  "android_apk_url": "https://raw.githubusercontent.com/supermafari007/WiiU-Transfer-Tools/main/Android/WiiU_Transfer_Tools_Android.apk",
+  "pc_gui_url": "https://raw.githubusercontent.com/supermafari007/WiiU-Transfer-Tools/main/PC/wiiu_transfer_gui.py",
+  "notes": "Ver. 2.0.0: Memoria USB multi-formato (exFAT, FAT32, NTFS y FAT), Modo USB / Modo Red en lenguaje simple, instalador grafico para PC, soporte Android 9+ y actualizador conectado a GitHub."
+}

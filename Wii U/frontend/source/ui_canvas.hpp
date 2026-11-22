@@ -16,6 +16,7 @@
 #include <string>
 
 #include "font_atlas.hpp"
+#include "splash_screen.hpp"
 
 namespace wutui {
 
@@ -105,6 +106,22 @@ public:
     void Clear(uint32_t col) {
         if (!fb_) return;
         std::fill_n(fb_, LOGICAL_W * LOGICAL_H, col);
+    }
+
+    void DrawSplashScreen() {
+        if (!fb_) return;
+        const size_t totalPx = static_cast<size_t>(LOGICAL_W) * static_cast<size_t>(LOGICAL_H);
+        size_t pos = 0;
+        for (uint32_t i = 0; i < splash::kSplashRleCount && pos < totalPx; ++i) {
+            uint32_t cnt = splash::kSplashRleData[i * 2];
+            uint32_t col = splash::kSplashRleData[i * 2 + 1];
+            size_t take = std::min<size_t>(cnt, totalPx - pos);
+            std::fill_n(fb_ + pos, take, col);
+            pos += take;
+        }
+        if (pos < totalPx) {
+            std::fill_n(fb_ + pos, totalPx - pos, COL_BG);
+        }
     }
 
     void Present() {

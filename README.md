@@ -6,62 +6,61 @@
 
 Desarrollado por **El Diuca**.
 
-**Versión 1.0.0** — aplicación de Wii U y programa de PC.
+**Versión 2.0.0** — Aplicación para consola Wii U (`.wuhb`), Aplicación para Android 9+ (`.apk`) y Programa para PC Windows con Instalador Gráfico.
 
-**Wii U Transfer Tools** permite transferir e instalar paquetes WUP en consolas Wii U con Aroma, desde el programa de PC por red local o directamente desde un pendrive USB FAT32. Incluye **selección múltiple en cola** y una interfaz unificada para la consola y Windows.
+**Wii U Transfer Tools** permite transferir e instalar juegos de Wii U en consolas con Aroma utilizando **lenguaje 100% simple** y sin pasos técnicos, ya sea desde una **Memoria USB (`exFAT`, `FAT32`, `NTFS` o `FAT`)**, desde tu **Celular Android** (por cable USB o por Wi-Fi) o desde tu **PC con Windows** (por Wi-Fi o adaptador de red LAN USB).
 
 Este proyecto es **software de código abierto bajo la licencia MIT**. Consulta [LICENSE](LICENSE) para conocer los términos de uso, modificación y redistribución.
 
-## Así se ve Wii U Transfer Tools
+## Así se ve Wii U Transfer Tools (Ver. 2.0.0)
 
-| En la consola Wii U | Programa de PC para Windows |
+| En la consola Wii U (`Modo USB` / `Modo Red`) | Programa de PC + Instalador para Windows |
 |:---:|:---:|
-| ![Wii U Transfer Tools en TV y GamePad](Imagenes/1_WiiU_Transfer_Tools_consola.png) | ![Servidor de Wii U Transfer Tools para PC](Imagenes/2_WiiU_Transfer_Tools_PC.png) |
+| ![Wii U Transfer Tools en TV y GamePad](Imagenes/1_WiiU_Transfer_Tools_consola.png) | ![Programa de Wii U Transfer Tools para PC](Imagenes/2_WiiU_Transfer_Tools_PC.png) |
 
-## Estructura de carpetas
+<p align="center">
+  <img src="Imagenes/6_WiiU_Transfer_Tools_Android_MTP.png" alt="Wii U Transfer Tools para Android 9+" width="820">
+</p>
 
-* **`PC/`** — Servidor gráfico para Windows con interfaz moderna (`WiiU_Transfer.bat`):
-  * [wiiu_transfer_gui.py](PC/wiiu_transfer_gui.py): Ventana principal con selección de carpeta, listado de paquetes (`Paquete WUP` / `Carpeta`), IP local, velocidad en MB/s en vivo y registro de actividad.
-  * [transfer_server.py](PC/transfer_server.py): Motor TCP binario (`NFSA`, puerto `7331`) + autodescubrimiento UDP (puerto `7332`). También soporta `--cli`.
-  * [requirements.txt](PC/requirements.txt): dependencias de Python.
-  * `packages/`: Carpeta predeterminada donde colocar tus paquetes.
+## Novedades de la Versión 2.0.0
+
+* **Soporte Multi-Formato para Memoria USB (`exFAT`, `FAT32`, `NTFS` y `FAT`)**:
+  * Ya no necesitas formatear tu Memoria USB a FAT32 ni tienes límite de 4 GB por archivo: el motor de lectura USB en caliente lee directamente particiones **exFAT**, **NTFS**, **FAT32** y **FAT (FAT12/FAT16)** tanto en esquemas **MBR** como **GPT** en modo de solo lectura seguro.
+* **Selector Simplificado de 2 Modos (`Modo USB` y `Modo Red`)**:
+  * **`Modo USB`**: Detecta automáticamente si conectaste una **Memoria USB** (`exFAT` / `FAT32` / `NTFS` / `FAT`) o un **Celular Android** por cable USB en el puerto frontal de la consola.
+  * **`Modo Red`**: Optimizado al máximo tanto para **Wi-Fi** como para **Adaptador USB de Red (LAN Ethernet)** con pool `somemopt` de 3 MB + `SO_RUSRBUF` (ventana TCP de 512 KB, `TCP_MAXSEG = 1460`, `SO_NOSLOWSTART`, `TCP_NODELAY` y `TCP_NOACKDELAY`).
+* **Lenguaje 100% Simple y Familiar en las 3 Plataformas**:
+  * Opciones claras como **`Disco USB`** y **`Memoria Consola`**, método de copia **`Directo (Sin usar tarjeta SD)`** o **`Usando tarjeta SD temporal`**, y botón **`Musica: SI / NO`** en pantalla (o pulsando `[R-Stick]`).
+* **App Android compatible desde Android 9 (Pie, API 28) hacia arriba**:
+  * Pestañas **`Modo USB (Cable)`** y **`Modo Red (Wi-Fi)`**, acceso directo a **`Ajustes USB`** del teléfono, descompresor `.ZIP` integrado, botón **`i Info`** con enlace a GitHub y descarga directa de actualizaciones (`.apk` y `.wuhb`).
+* **Programa para PC con Instalador Gráfico para Windows y Actualizador GitHub**:
+  * Nuevo instalador gráfico (`PC/Instalar_WiiU_Transfer_Tools.bat`) que crea icono `.ICO` en el Escritorio y Menú Inicio (abriendo sin ventana negra de consola), configura automáticamente el Firewall de Windows y verifica nuevas versiones en [version.json](version.json).
+
+## Estructura del proyecto
+
 * **`Wii U/`** —
-  * `WiiU_Transfer.wuhb`: Aplicación compilada para **Aroma**, lista para copiar a `sd:/wiiu/apps/WiiU_Transfer.wuhb`.
-  * [frontend/source/main.cpp](Wii%20U/frontend/source/main.cpp), [frontend/source/usb_fat_reader.hpp](Wii%20U/frontend/source/usb_fat_reader.hpp) y [frontend/source/ui_canvas.hpp](Wii%20U/frontend/source/ui_canvas.hpp): Interfaz visual dual-screen nativa 720p (TV 1280×720 + GamePad 854×480 táctil) en WUT puro (`OSScreen`, `VPAD`, `KPAD`, `MCP`, `FSA`) con **2 fuentes** (`Red PC` y `Pendrive USB FAT32`) y **2 modos de escritura**:
-    1. **`NetFSA (Cero-SD / Mocha)`** *(predeterminado en Aroma)*: Cero espacio usado en la tarjeta SD; desbloquea `/dev/fsa` con el MochaPayload integrado de Aroma, copia por doble búfer multi-core (CPU1 lee Red/Pendrive mientras CPU2 escribe en paralelo a `usr/tmp` del USB/NAND), instala vía `MCP_InstallTitleAsync` y limpia el temporal automáticamente.
-    2. **`Direct-Sync (Cache SD)`**: Usa temporal en la tarjeta SD con limpieza automática al terminar o cancelar (ideal si tu USB/NAND no tiene espacio extra para el temporal o no usas Mocha).
-  * `iosu_module/`: Código base ARM (`wiiu_transfer_iosu`) para el hook experimental sobre `/dev/fsa` en IOSU.
-  * `protocol/netfsa_protocol.h`: Cabecera binaria compartida.
-
-## Descargar la versión 1.0.0
-
-* **Wii U:** [WiiU_Transfer.wuhb](<Wii U/WiiU_Transfer.wuhb>), listo para copiar a la tarjeta SD.
-* **PC:** descarga el repositorio y ejecuta `PC/WiiU_Transfer.bat`; el programa para Windows está disponible como código fuente y necesita Python.
+  * [WiiU_Transfer.wuhb](<Wii U/WiiU_Transfer.wuhb>): Aplicación compilada para **Aroma**, lista para copiar a `sd:/wiiu/apps/WiiU_Transfer.wuhb` (incluye música de pantalla de inicio y tema de fondo en TV y GamePad con botón de silencio).
+  * [frontend/source/main.cpp](Wii%20U/frontend/source/main.cpp), [frontend/source/usb_fat_reader.hpp](Wii%20U/frontend/source/usb_fat_reader.hpp), [frontend/source/usb_mtp_reader.hpp](Wii%20U/frontend/source/usb_mtp_reader.hpp), [frontend/source/audio_player.hpp](Wii%20U/frontend/source/audio_player.hpp) y [frontend/source/ui_canvas.hpp](Wii%20U/frontend/source/ui_canvas.hpp).
+* **`Android/`** —
+  * [WiiU_Transfer_Tools_Android.apk](Android/WiiU_Transfer_Tools_Android.apk): Aplicación nativa para **Android 9.0 (API 28) y superiores**.
+  * Código fuente en [Android/app/src/main/java/com/eldiuca/wiiutransfer/](Android/app/src/main/java/com/eldiuca/wiiutransfer/) y script de compilación [Android/build_android.ps1](Android/build_android.ps1).
+* **`PC/`** —
+  * [Instalar_WiiU_Transfer_Tools.bat](PC/Instalar_WiiU_Transfer_Tools.bat) / [Instalar_WiiU_Transfer_Tools.py](PC/Instalar_WiiU_Transfer_Tools.py): Instalador gráfico oficial para Windows.
+  * [wiiu_transfer_gui.py](PC/wiiu_transfer_gui.py) y [transfer_server.py](PC/transfer_server.py): Interfaz para PC con barra de progreso en vivo por juego, velocidad en MB/s, ventana **Acerca de / GitHub** y auto-actualizador.
+* **`version.json`** — Manifiesto de versión consultado automáticamente por la App Android y el programa de PC para avisar y descargar nuevas actualizaciones desde GitHub.
 
 ## Guía rápida de uso
 
-1. **En la consola Wii U:**
+1. **En tu consola Wii U:**
    * Copia `Wii U/WiiU_Transfer.wuhb` dentro de `sd:/wiiu/apps/WiiU_Transfer.wuhb`.
-   * *(Opcional)* Si tu red bloquea el broadcast UDP, crea el archivo `sd:/wiiu/apps/WiiU_Transfer/server_ip.txt` con la IP de tu PC (ejemplo: `192.168.1.50`).
-2. **En tu PC:**
-   * Instala Python 3.10 o superior y las dependencias con `py -m pip install -r PC/requirements.txt`.
-   * Coloca tus carpetas de paquetes dentro de `PC/packages/` (o selecciona cualquier carpeta desde la interfaz).
-   * Haz doble clic en `PC/WiiU_Transfer.bat` y pulsa **Iniciar Servidor**.
-   * Asegúrate de permitir a Python en el Firewall de Windows en redes privadas (puertos TCP `7331` y UDP `7332`).
-3. **Instalar desde Red PC (uno o varios paquetes):**
-   * Abre **Wii U Transfer Tools** en la Wii U, elige paquetes con `Arriba / Abajo` (o tocando el GamePad).
-   * Para **selección múltiple**, marca varios paquetes con **`[-]` / `[ZL]`** (o tocando la casilla/tarjeta en el GamePad), o marca todos con **`[ZR]`** / botón **`Todos`**.
-   * Selecciona **USB Externo** o **NAND Interna** con `Izquierda / Derecha`, y pulsa **`[A]`** para instalar toda la cola.
-4. **Instalar desde Pendrive USB (FAT32) en caliente (sin tocar tu disco duro trasero):**
-   * Formatea tu pendrive en **FAT32** y copia tus carpetas WUP en la raíz (o dentro de `/install` o `/packages`).
-   * Abre **Wii U Transfer Tools** primero en tu Wii U, luego conecta el pendrive en un **puerto USB frontal**.
-   * Pulsa **`[X]`** (o toca **`Pendrive USB`** en la barra superior) y **`[Y]`** para detectarlo.
-   * Marca 1 o varios paquetes y pulsa **`[A]`** para instalar. **Retira el pendrive antes de salir al Menú de Wii U** para evitar el aviso de formateo del sistema.
-
-## Cómo recompilar `WiiU_Transfer.wuhb` en Windows
-
-Requiere devkitPro con WUT instalado en `C:\devkitPro\opt\devkitpro`.
-
-```powershell
-powershell -ExecutionPolicy Bypass -File "Wii U/frontend/build_wiiu.ps1"
-```
+2. **Para instalar desde una Memoria USB (`exFAT`, `FAT32`, `NTFS` o `FAT`):**
+   * Copia las carpetas de tus juegos en la raíz de tu Memoria USB (o dentro de `/install`, `/packages` o `/WiiU_Transfer`).
+   * Abre **Wii U Transfer Tools** en la consola, conecta tu Memoria USB en el **puerto USB frontal** y en **`Modo USB`** pulsa **`[Y]`**.
+   * Marca uno o varios juegos, elige **`Disco USB`** o **`Memoria Consola`** y pulsa **`[A]`** para instalar. **Retira la memoria USB antes de salir al Menú Wii U**.
+3. **Para instalar desde tu Celular Android (Android 9 o superior):**
+   * Instala `Android/WiiU_Transfer_Tools_Android.apk` en tu celular y coloca tus juegos en `/WiiU_Transfer` o `/Download`.
+   * **Por Cable USB**: En la app elige **`Modo USB (Cable)`**, pulsa **`Preparar Juegos para USB`**, conecta el celular al USB frontal de la Wii U en modo *Transferencia de archivos* y en la consola elige **`Modo USB`** y pulsa **`[Y]`**.
+   * **Por Red Wi-Fi**: En la app elige **`Modo Red (Wi-Fi)`**, pulsa **`Compartir Juegos por Red`** y en la consola cambia a **`Modo Red`** con **`[X]`** y pulsa **`[Y]`**.
+4. **Para instalar desde tu PC con Windows:**
+   * Ejecuta `PC/Instalar_WiiU_Transfer_Tools.bat` (o abre directo `PC/Iniciar_WiiU_Transfer_GUI.bat`).
+   * Pon tus carpetas de juegos en `PC/packages/`, pulsa **`Compartir Juegos`** y en tu Wii U cambia a **`Modo Red`** con **`[X]`** y pulsa **`[Y]`**.

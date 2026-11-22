@@ -8,7 +8,13 @@ __pycache__/
 /Wii U/frontend/WiiU_Transfer.rpx
 /Wii U/frontend/WiiU_Transfer.wuhb
 
+/Android/build/
+/Android/release_key.jks
+*.idsig
+
 /3 - Codigo fuente/
+/Imagenes/Conceptos_v1.0.1/
+/Sonidos/
 /INSTRUCCIONES.txt
 
 Thumbs.db

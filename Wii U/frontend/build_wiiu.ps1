@@ -40,6 +40,7 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "[4/4] Empaquetando WiiU_Transfer.wuhb..."
 & $WuhbTool $Rpx $Wuhb `
+    "--content=$Root/content" `
     --name="Wii U Transfer Tools" `
     --short-name="Wii U Transfer Tools" `
     --author="El Diuca" `

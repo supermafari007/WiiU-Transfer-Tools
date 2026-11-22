@@ -148,6 +148,11 @@ class TransferServer:
         self._active_clients: set[str] = set()
         self._bytes_sent_total = 0
         self._bytes_sent_window = 0
+        self._current_pkg = ""
+        self._current_file = ""
+        self._pkg_totals: dict[str, int] = {}
+        self._pkg_sent: dict[str, int] = {}
+        self._completed_pkgs: set[str] = set()
 
     def _emit(self, level: str, message: str) -> None:
         if self._on_event:
@@ -173,11 +178,21 @@ class TransferServer:
             window_bytes = self._bytes_sent_window
             if reset_window:
                 self._bytes_sent_window = 0
+            cur_pkg = self._current_pkg
+            cur_pkg_total = self._pkg_totals.get(cur_pkg, 0) if cur_pkg else 0
+            cur_pkg_sent = min(self._pkg_sent.get(cur_pkg, 0), cur_pkg_total) if cur_pkg else 0
             return {
                 "active_clients": sorted(self._active_clients),
                 "client_count": len(self._active_clients),
                 "bytes_sent_total": self._bytes_sent_total,
                 "bytes_sent_window": window_bytes,
+                "current_pkg": cur_pkg,
+                "current_file": self._current_file,
+                "pkg_bytes_sent": cur_pkg_sent,
+                "pkg_total_bytes": cur_pkg_total,
+                "pkg_sent_map": dict(self._pkg_sent),
+                "pkg_totals_map": dict(self._pkg_totals),
+                "completed_pkgs": set(self._completed_pkgs),
             }
 
     def start(self) -> None:
@@ -282,18 +297,26 @@ class TransferServer:
             )
             t.start()
 
-    def _record_sent(self, count: int) -> None:
+    def _record_sent(self, count: int, pkg_name: str = "") -> None:
         with self._lock:
             self._bytes_sent_total += count
             self._bytes_sent_window += count
+            if pkg_name:
+                new_sent = self._pkg_sent.get(pkg_name, 0) + count
+                self._pkg_sent[pkg_name] = new_sent
+                total = self._pkg_totals.get(pkg_name, 0)
+                if total > 0 and new_sent >= total:
+                    self._completed_pkgs.add(pkg_name)
 
     def _handle_client(self, conn: socket.socket, addr: tuple[str, int]) -> None:
         client_ip = addr[0]
         client_tag = f"{addr[0]}:{addr[1]}"
-        conn.settimeout(5.0)
+        conn.settimeout(20.0)
         try:
             conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            conn.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1024 * 1024)
+            conn.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            conn.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 2 * 1024 * 1024)
+            conn.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 256 * 1024)
         except OSError:
             pass
 
@@ -320,9 +343,21 @@ class TransferServer:
                     sub = payload.decode("utf-8", errors="replace").strip("\x00")
                     lines = []
                     if not sub:
-                        for pkg in scan_packages(root):
+                        pkgs = scan_packages(root)
+                        with self._lock:
+                            for pkg in pkgs:
+                                self._pkg_totals[pkg["name"]] = pkg["total_bytes"]
+                        for pkg in pkgs:
                             lines.append(f"D|{pkg['name']}|{pkg['total_bytes']}|{pkg['file_count']}")
                     else:
+                        pkg_head = sub.strip("/\\").split("/")[0].split("\\")[0]
+                        with self._lock:
+                            if pkg_head and pkg_head not in self._pkg_totals:
+                                for pkg in scan_packages(root):
+                                    self._pkg_totals[pkg["name"]] = pkg["total_bytes"]
+                            if pkg_head:
+                                self._pkg_sent[pkg_head] = 0
+                                self._completed_pkgs.discard(pkg_head)
                         target = _safe_resolve(root, sub)
                         if not target or not target.is_dir():
                             self._record_sent(_send_packet(conn, STATUS_ERR_NF))
@@ -387,22 +422,32 @@ class TransferServer:
                         self._record_sent(_send_packet(conn, STATUS_ERR_NF))
                         continue
 
+                    pkg_head = rel.strip("/\\").split("/")[0].split("\\")[0]
+                    with self._lock:
+                        self._current_pkg = pkg_head
+                        self._current_file = rel
+                        if pkg_head and pkg_head not in self._pkg_totals:
+                            for pkg in scan_packages(root):
+                                self._pkg_totals[pkg["name"]] = pkg["total_bytes"]
+
                     file_size = target.stat().st_size
-                    self._emit("INFO", f"Streaming continuo: {rel} ({format_bytes(file_size)})")
+                    self._emit("INFO", f"Enviando a Wii U: {rel} ({format_bytes(file_size)})")
                     sent_hdr = _send_packet(conn, STATUS_OK, struct.pack(">Q", file_size))
                     self._record_sent(sent_hdr)
 
-                    stream_chunk = 256 * 1024
-                    with open(target, "rb") as sf:
+                    stream_chunk = 512 * 1024
+                    stream_buf = bytearray(stream_chunk)
+                    mv = memoryview(stream_buf)
+                    with open(target, "rb", buffering=0) as sf:
                         remaining = file_size
                         while remaining > 0 and not self._stop_event.is_set():
-                            chunk = sf.read(min(stream_chunk, remaining))
-                            if not chunk:
+                            to_read = min(stream_chunk, remaining)
+                            n_read = sf.readinto(mv[:to_read])
+                            if not n_read:
                                 break
-                            conn.sendall(chunk)
-                            c_len = len(chunk)
-                            remaining -= c_len
-                            self._record_sent(c_len)
+                            conn.sendall(mv[:n_read])
+                            remaining -= n_read
+                            self._record_sent(n_read, pkg_head)
 
                 else:
                     self._record_sent(_send_packet(conn, STATUS_ERR_BAD))

@@ -15,8 +15,8 @@
 namespace usbfat {
 
 constexpr uint32_t kSectorSize      = 512;
-constexpr uint32_t kMaxRawSectors   = 256; // 128 KB por IOS_Ioctlv
-constexpr uint32_t kFatCacheSectors = 128; // 64 KB de cache FAT en MEM2
+constexpr uint32_t kMaxRawSectors   = 2048; // 1 MB por IOS_Ioctlv (maximiza throughput de lectura USB)
+constexpr uint32_t kFatCacheSectors = 1024; // 512 KB de cache FAT en MEM2
 
 inline uint16_t Rd16LE(const uint8_t* p) {
     return static_cast<uint16_t>(p[0]) | (static_cast<uint16_t>(p[1]) << 8);
@@ -78,10 +78,18 @@ inline char FoldUtf16ToAscii(uint16_t ch) {
     }
 }
 
+struct UsbExtent {
+    uint64_t lba = 0;     // LBA de inicio en sectores de 512 B (0 = sparse/ceros en NTFS)
+    uint64_t byteLen = 0; // Longitud del tramo contiguo en bytes
+};
+
 struct UsbFile {
     std::string subPath;
     uint32_t startCluster = 0;
     uint64_t size = 0;
+    bool exfatContiguous = false;
+    std::vector<UsbExtent> extents;
+    std::vector<uint8_t> residentData;
 };
 
 struct UsbPkg {
@@ -91,7 +99,16 @@ struct UsbPkg {
     bool marked = false;
 };
 
-// Acceso crudo de SOLO LECTURA a /dev/usb0X via Mocha FSA (nunca escribe en el dispositivo)
+enum class FsKind {
+    None,
+    FAT12,
+    FAT16,
+    FAT32,
+    ExFAT,
+    NTFS
+};
+
+// Acceso crudo de SOLO LECTURA a /dev/usb0X via Mocha FSA (nunca escribe en la Memoria USB)
 class FsaRawDevice {
 public:
     FsaRawDevice() = default;
@@ -228,27 +245,127 @@ public:
         bool isDir = false;
         uint32_t startCluster = 0;
         uint64_t size = 0;
+        bool exfatContiguous = false;
+        uint64_t dirByteLen = 0;
+        uint64_t ntfsMftRec = 0;
+        std::vector<UsbExtent> extents;
+        std::vector<uint8_t> residentData;
     };
 
     class FileStream {
     public:
         FileStream() = default;
 
-        void Open(UsbFatVolume* vol, uint32_t startCluster, uint64_t size) {
+        void Open(UsbFatVolume* vol, const UsbFile& file) {
             vol_ = vol;
-            curCluster_ = startCluster;
+            curCluster_ = file.startCluster;
             offsetInCluster_ = 0;
-            remaining_ = size;
+            remaining_ = file.size;
+            residentPos_ = 0;
+            residentData_ = file.residentData;
+            extents_ = file.extents;
+            extIdx_ = 0;
+            offsetInExt_ = 0;
+
+            if (vol_ && file.exfatContiguous && extents_.empty() && file.size > 0 && vol_->IsValidCluster(file.startCluster)) {
+                uint64_t clusBytes = vol_->ClusterBytes();
+                uint64_t numClus = (file.size + clusBytes - 1) / clusBytes;
+                UsbExtent ext;
+                ext.lba = vol_->ClusterToLba(file.startCluster);
+                ext.byteLen = numClus * clusBytes;
+                extents_.push_back(ext);
+            }
+            useExtents_ = !extents_.empty();
+            useResident_ = !residentData_.empty();
+        }
+
+        void Open(UsbFatVolume* vol, uint32_t startCluster, uint64_t size) {
+            UsbFile f;
+            f.startCluster = startCluster;
+            f.size = size;
+            Open(vol, f);
         }
 
         uint64_t Remaining() const { return remaining_; }
 
-        // Lee hasta maxBytes en dst (si dst esta alineado a 0x40, usa DMA directo por bloques contiguos)
         bool ReadExact(void* dst, uint32_t len) {
             if (!vol_ || len > remaining_) return false;
             if (len == 0) return true;
 
             auto* out = static_cast<uint8_t*>(dst);
+
+            // 1. Archivo residente en MFT (NTFS pequeño)
+            if (useResident_) {
+                if (residentPos_ + len > residentData_.size()) {
+                    size_t avail = (residentPos_ < residentData_.size()) ? (residentData_.size() - residentPos_) : 0;
+                    if (avail > 0) std::memcpy(out, residentData_.data() + residentPos_, avail);
+                    std::memset(out + avail, 0, len - avail);
+                } else {
+                    std::memcpy(out, residentData_.data() + residentPos_, len);
+                }
+                residentPos_ += len;
+                remaining_ -= len;
+                return true;
+            }
+
+            // 2. Extents pre-resueltos (NTFS data runs o exFAT NoFatChain contiguo)
+            if (useExtents_) {
+                uint32_t got = 0;
+                while (got < len) {
+                    if (extIdx_ >= extents_.size()) {
+                        uint32_t rem = len - got;
+                        std::memset(out + got, 0, rem);
+                        got += rem;
+                        remaining_ -= rem;
+                        break;
+                    }
+                    const UsbExtent& ext = extents_[extIdx_];
+                    uint64_t availInExt = (offsetInExt_ < ext.byteLen) ? (ext.byteLen - offsetInExt_) : 0;
+                    if (availInExt == 0) {
+                        ++extIdx_;
+                        offsetInExt_ = 0;
+                        continue;
+                    }
+
+                    uint32_t want = static_cast<uint32_t>(std::min<uint64_t>(len - got, availInExt));
+                    if (ext.lba == 0) {
+                        std::memset(out + got, 0, want);
+                        got += want;
+                        remaining_ -= want;
+                        offsetInExt_ += want;
+                    } else if ((offsetInExt_ % kSectorSize) == 0 && want >= kSectorSize) {
+                        uint64_t secInExt = offsetInExt_ / kSectorSize;
+                        uint32_t takeSectors = want / kSectorSize;
+                        uint32_t takeBytes = takeSectors * kSectorSize;
+                        if (!vol_->raw_.ReadSectors(ext.lba + secInExt, takeSectors, out + got)) {
+                            return false;
+                        }
+                        got += takeBytes;
+                        remaining_ -= takeBytes;
+                        offsetInExt_ += takeBytes;
+                    } else {
+                        uint64_t secInExt = offsetInExt_ / kSectorSize;
+                        uint32_t offInSec = static_cast<uint32_t>(offsetInExt_ % kSectorSize);
+                        uint8_t secBuf[kSectorSize];
+                        if (!vol_->raw_.ReadSectors(ext.lba + secInExt, 1, secBuf)) {
+                            return false;
+                        }
+                        uint32_t take = std::min<uint32_t>(want, kSectorSize - offInSec);
+                        std::memcpy(out + got, secBuf + offInSec, take);
+                        got += take;
+                        remaining_ -= take;
+                        offsetInExt_ += take;
+                    }
+
+                    if (offsetInExt_ >= ext.byteLen) {
+                        ++extIdx_;
+                        offsetInExt_ = 0;
+                    }
+                }
+                return true;
+            }
+
+            // 3. Cadena de clusters FAT12 / FAT16 / FAT32 / exFAT con FAT chain
             uint32_t got = 0;
             const uint32_t clusBytes = vol_->ClusterBytes();
 
@@ -256,7 +373,6 @@ public:
                 if (!vol_->IsValidCluster(curCluster_)) return false;
 
                 uint32_t want = len - got;
-                // Camino rapido: alineado al inicio de sector y al menos 1 sector completo
                 if ((offsetInCluster_ % kSectorSize) == 0 && want >= kSectorSize) {
                     uint32_t secInClus = offsetInCluster_ / kSectorSize;
                     uint32_t availWantSectors = want / kSectorSize;
@@ -297,7 +413,6 @@ public:
                     continue;
                 }
 
-                // Camino cola/desalineado (< 512 B o offset parcial dentro del sector)
                 uint32_t secInClus = offsetInCluster_ / kSectorSize;
                 uint32_t offInSec  = offsetInCluster_ % kSectorSize;
                 uint8_t secBuf[kSectorSize];
@@ -322,6 +437,15 @@ public:
         uint32_t curCluster_ = 0;
         uint32_t offsetInCluster_ = 0;
         uint64_t remaining_ = 0;
+
+        bool useResident_ = false;
+        size_t residentPos_ = 0;
+        std::vector<uint8_t> residentData_;
+
+        bool useExtents_ = false;
+        std::vector<UsbExtent> extents_;
+        size_t extIdx_ = 0;
+        uint64_t offsetInExt_ = 0;
     };
 
     UsbFatVolume() = default;
@@ -333,8 +457,10 @@ public:
     void Unmount() {
         raw_.Close();
         mounted_ = false;
+        fsKind_ = FsKind::None;
         fatCacheBaseSec_ = UINT32_MAX;
         fatCacheSecCount_ = 0;
+        mftExtents_.clear();
     }
 
     void Shutdown() {
@@ -347,6 +473,17 @@ public:
     }
 
     bool IsMounted() const { return mounted_; }
+    FsKind Kind() const { return fsKind_; }
+    const char* FsName() const {
+        switch (fsKind_) {
+            case FsKind::FAT12: return "FAT";
+            case FsKind::FAT16: return "FAT";
+            case FsKind::FAT32: return "FAT32";
+            case FsKind::ExFAT: return "exFAT";
+            case FsKind::NTFS:  return "NTFS";
+            default:            return "USB";
+        }
+    }
     uint32_t ClusterBytes() const { return secPerClus_ * kSectorSize; }
 
     bool ProbeAndMount(FSAClientHandle rawClient, std::string& outDevPath, std::string& outDiag) {
@@ -355,20 +492,18 @@ public:
         outDiag.clear();
 
         if (rawClient < 0) {
-            outDiag = "Mocha/Aroma no disponible.";
+            outDiag = "Acceso USB no disponible.";
             return false;
         }
         if (!fatCache_) {
             fatCache_ = static_cast<uint8_t*>(MEMAllocFromDefaultHeapEx(kFatCacheSectors * kSectorSize, 0x40));
             if (!fatCache_) {
-                outDiag = "Sin memoria para cache FAT.";
+                outDiag = "Sin memoria para cache USB.";
                 return false;
             }
         }
 
         const char* candidates[] = {"/dev/usb01", "/dev/usb02", "/dev/usb03", "/dev/usb04"};
-        bool sawNonFatPartition = false;
-        std::string nonFatKind;
 
         for (const char* dev : candidates) {
             if (!raw_.Open(rawClient, dev)) continue;
@@ -379,13 +514,12 @@ public:
                 continue;
             }
 
-            // 1. Superfloppy (BPB FAT directo en LBA 0)
-            if (TryParseFatBpb(0, nonFatKind)) {
+            // 1. Superfloppy (BPB directo en LBA 0: FAT12/16/32, exFAT o NTFS)
+            if (TryParseVolumeBpb(0)) {
                 mounted_ = true;
                 outDevPath = dev;
                 return true;
             }
-            if (!nonFatKind.empty()) sawNonFatPartition = true;
 
             // 2. MBR (firma estandar 0x55 0xAA o UStealth 0x55 0xAB)
             bool validMbrSig = (sec0[510] == 0x55 && (sec0[511] == 0xAA || sec0[511] == 0xAB));
@@ -401,31 +535,25 @@ public:
                         continue;
                     }
                     if (ptype == 0 || firstLba == 0 || secCount == 0) continue;
-                    if (TryParseFatBpb(firstLba, nonFatKind)) {
+                    if (TryParseVolumeBpb(firstLba)) {
                         mounted_ = true;
                         outDevPath = dev;
                         return true;
                     }
-                    if (!nonFatKind.empty()) sawNonFatPartition = true;
                 }
 
                 // 3. GPT (si se detecto MBR protector 0xEE)
-                if (isGpt && ProbeGptPartitions(nonFatKind)) {
+                if (isGpt && ProbeGptPartitions()) {
                     mounted_ = true;
                     outDevPath = dev;
                     return true;
                 }
-                if (!nonFatKind.empty()) sawNonFatPartition = true;
             }
 
             raw_.Close();
         }
 
-        if (sawNonFatPartition) {
-            outDiag = "USB en " + nonFatKind + ": formatea a FAT32.";
-        } else {
-            outDiag = "Sin pendrive FAT32. Conecta USB frontal y [Y].";
-        }
+        outDiag = "Sin Memoria USB (exFAT / FAT32 / NTFS / FAT).";
         return false;
     }
 
@@ -434,7 +562,7 @@ public:
         if (!mounted_) return false;
 
         std::vector<DirEntry> rootEntries;
-        if (!ListDirectory(isFat32_ ? rootCluster_ : 0, !isFat32_, rootEntries)) {
+        if (!ListRootDirectory(rootEntries)) {
             return false;
         }
 
@@ -443,30 +571,35 @@ public:
                 if (!e.isDir || e.name.empty() || e.name[0] == '.') continue;
                 if (EqualsCI(e.name, "System Volume Information") ||
                     EqualsCI(e.name, "$RECYCLE.BIN") ||
+                    EqualsCI(e.name, "LOST.DIR") ||
+                    EqualsCI(e.name, "Android") ||
                     EqualsCI(e.name, "wiiu") ||
                     EqualsCI(e.name, "install") ||
-                    EqualsCI(e.name, "packages")) {
+                    EqualsCI(e.name, "packages") ||
+                    EqualsCI(e.name, "WiiU_Transfer")) {
                     continue;
                 }
 
                 UsbPkg pkg;
                 pkg.name = e.name;
                 bool looksLikeWup = false;
-                CollectFilesRecursive(e.startCluster, "", 0, pkg.files, pkg.totalBytes, looksLikeWup);
+                CollectFilesRecursive(e, "", 0, pkg.files, pkg.totalBytes, looksLikeWup);
                 if (looksLikeWup && !pkg.files.empty()) {
                     outPkgs.push_back(std::move(pkg));
                 }
             }
         };
 
-        // 1. Carpetas WUP en la raiz del pendrive
+        // 1. Carpetas de juegos en la raiz de la Memoria USB
         scanContainerDir(rootEntries);
 
-        // 2. Carpetas WUP dentro de /install o /packages si existen
+        // 2. Carpetas de juegos dentro de /install, /packages o /WiiU_Transfer si existen
         for (const auto& e : rootEntries) {
-            if (e.isDir && (EqualsCI(e.name, "install") || EqualsCI(e.name, "packages"))) {
+            if (e.isDir && (EqualsCI(e.name, "install") ||
+                            EqualsCI(e.name, "packages") ||
+                            EqualsCI(e.name, "WiiU_Transfer"))) {
                 std::vector<DirEntry> subEntries;
-                if (ListDirectory(e.startCluster, false, subEntries)) {
+                if (ListSubDirectory(e, subEntries)) {
                     scanContainerDir(subEntries);
                 }
             }
@@ -475,7 +608,7 @@ public:
     }
 
 private:
-    bool ProbeGptPartitions(std::string& outNonFatKind) {
+    bool ProbeGptPartitions() {
         uint8_t hdr[kSectorSize]{};
         if (!raw_.ReadSectors(1, 1, hdr)) return false;
         if (std::memcmp(hdr, "EFI PART", 8) != 0) return false;
@@ -502,31 +635,67 @@ private:
             uint64_t lastLba  = Rd64LE(pe + 40);
             if (firstLba == 0 || lastLba <= firstLba) continue;
 
-            if (TryParseFatBpb(firstLba, outNonFatKind)) {
+            if (TryParseVolumeBpb(firstLba)) {
                 return true;
             }
         }
         return false;
     }
 
-    bool TryParseFatBpb(uint64_t partLba, std::string& outNonFatKind) {
+    bool TryParseVolumeBpb(uint64_t partLba) {
         uint8_t bpb[kSectorSize]{};
         if (!raw_.ReadSectors(partLba, 1, bpb)) return false;
-        if (bpb[510] != 0x55 || bpb[511] != 0xAA) return false;
+        if (bpb[510] != 0x55 || (bpb[511] != 0xAA && bpb[511] != 0xAB)) return false;
 
         if (std::memcmp(bpb + 3, "EXFAT   ", 8) == 0) {
-            outNonFatKind = "exFAT";
-            return false;
+            return TryParseExFatBpb(partLba, bpb);
         }
         if (std::memcmp(bpb + 3, "NTFS    ", 8) == 0) {
-            outNonFatKind = "NTFS";
-            return false;
+            return TryParseNtfsBpb(partLba, bpb);
         }
+        return TryParseFatBpb(partLba, bpb);
+    }
 
+    // =========================================================================
+    // 1. Parser exFAT
+    // =========================================================================
+    bool TryParseExFatBpb(uint64_t partLba, const uint8_t* bpb) {
+        uint32_t fatOff      = Rd32LE(bpb + 80);
+        uint32_t fatLen      = Rd32LE(bpb + 84);
+        uint32_t clusHeapOff = Rd32LE(bpb + 88);
+        uint32_t clusCnt     = Rd32LE(bpb + 92);
+        uint32_t rootClus    = Rd32LE(bpb + 96);
+        uint8_t  bpsShift    = bpb[108];
+        uint8_t  spcShift    = bpb[109];
+
+        if (bpsShift < 9 || bpsShift > 12) return false;
+        if ((bpsShift + spcShift) > 25) return false;
+        if (fatOff == 0 || fatLen == 0 || clusHeapOff == 0 || clusCnt == 0 || rootClus < 2) return false;
+
+        uint32_t secScale = 1u << (bpsShift - 9);
+        partStartLba_     = partLba;
+        secPerClus_       = (1u << spcShift) * secScale;
+        fatStartLba_      = partLba + static_cast<uint64_t>(fatOff) * secScale;
+        fatSectors_       = fatLen * secScale;
+        rootDirLba_       = 0;
+        rootDirSectors_   = 0;
+        firstDataSec_     = clusHeapOff * secScale;
+        rootCluster_      = rootClus;
+        clusterCount_     = clusCnt;
+        fsKind_           = FsKind::ExFAT;
+        fatCacheBaseSec_  = UINT32_MAX;
+        fatCacheSecCount_ = 0;
+        return true;
+    }
+
+    // =========================================================================
+    // 2. Parser FAT12 / FAT16 / FAT32
+    // =========================================================================
+    bool TryParseFatBpb(uint64_t partLba, const uint8_t* bpb) {
         uint16_t bytesPerSec = Rd16LE(bpb + 11);
-        uint8_t secPerClus   = bpb[13];
+        uint8_t  secPerClus  = bpb[13];
         uint16_t rsvdSecCnt  = Rd16LE(bpb + 14);
-        uint8_t numFats      = bpb[16];
+        uint8_t  numFats     = bpb[16];
         uint16_t rootEntCnt  = Rd16LE(bpb + 17);
         uint16_t totSec16    = Rd16LE(bpb + 19);
         uint16_t fatSz16     = Rd16LE(bpb + 22);
@@ -534,50 +703,514 @@ private:
         uint32_t fatSz32     = Rd32LE(bpb + 36);
         uint32_t rootClus    = Rd32LE(bpb + 44);
 
-        if (bytesPerSec != kSectorSize) return false;
+        if (bytesPerSec < 512 || bytesPerSec > 4096 || (bytesPerSec & (bytesPerSec - 1)) != 0) return false;
         if (secPerClus == 0 || (secPerClus & (secPerClus - 1)) != 0 || secPerClus > 128) return false;
-        if (rsvdSecCnt == 0 || numFats == 0 || numFats > 2) return false;
+        if (rsvdSecCnt == 0 || numFats == 0 || numFats > 4) return false;
 
         uint32_t totSec = totSec16 ? static_cast<uint32_t>(totSec16) : totSec32;
         uint32_t fatSz  = fatSz16 ? static_cast<uint32_t>(fatSz16) : fatSz32;
         if (totSec == 0 || fatSz == 0) return false;
 
-        uint32_t rootDirSectors = ((static_cast<uint32_t>(rootEntCnt) * 32u) + (kSectorSize - 1)) / kSectorSize;
+        uint32_t secScale       = bytesPerSec / kSectorSize;
+        uint32_t rootDirSectors = ((static_cast<uint32_t>(rootEntCnt) * 32u) + (bytesPerSec - 1)) / bytesPerSec;
         uint32_t firstDataSec   = static_cast<uint32_t>(rsvdSecCnt) + static_cast<uint32_t>(numFats) * fatSz + rootDirSectors;
         if (firstDataSec >= totSec) return false;
 
         uint32_t dataSec = totSec - firstDataSec;
         uint32_t clusCnt = dataSec / secPerClus;
+        if (clusCnt == 0) return false;
 
-        if (clusCnt < 4085) return false; // FAT12 no soportado
-        bool fat32 = (clusCnt >= 65525);
-        if (fat32) {
-            if (fatSz16 != 0 || rootClus < 2) return false;
-        } else {
+        FsKind kind = FsKind::FAT32;
+        if (clusCnt < 4085) {
             if (fatSz16 == 0 || rootDirSectors == 0) return false;
+            kind = FsKind::FAT12;
+        } else if (clusCnt < 65525) {
+            if (fatSz16 == 0 || rootDirSectors == 0) return false;
+            kind = FsKind::FAT16;
+        } else {
+            if (fatSz16 != 0 || rootClus < 2) return false;
+            kind = FsKind::FAT32;
         }
 
-        partStartLba_   = partLba;
-        secPerClus_     = secPerClus;
-        fatStartLba_    = partLba + rsvdSecCnt;
-        fatSectors_     = fatSz;
-        rootDirLba_     = partLba + rsvdSecCnt + static_cast<uint64_t>(numFats) * fatSz;
-        rootDirSectors_ = rootDirSectors;
-        firstDataSec_   = firstDataSec;
-        rootCluster_    = fat32 ? rootClus : 0;
-        clusterCount_   = clusCnt;
-        isFat32_        = fat32;
-        fatCacheBaseSec_ = UINT32_MAX;
+        partStartLba_     = partLba;
+        secPerClus_       = static_cast<uint32_t>(secPerClus) * secScale;
+        fatStartLba_      = partLba + static_cast<uint64_t>(rsvdSecCnt) * secScale;
+        fatSectors_       = fatSz * secScale;
+        rootDirLba_       = partLba + (static_cast<uint64_t>(rsvdSecCnt) + static_cast<uint64_t>(numFats) * fatSz) * secScale;
+        rootDirSectors_   = rootDirSectors * secScale;
+        firstDataSec_     = firstDataSec * secScale;
+        rootCluster_      = (kind == FsKind::FAT32) ? rootClus : 0;
+        clusterCount_     = clusCnt;
+        fsKind_           = kind;
+        fatCacheBaseSec_  = UINT32_MAX;
         fatCacheSecCount_ = 0;
         return true;
     }
 
+    // =========================================================================
+    // 3. Parser NTFS ($MFT, Data Runs, $INDEX_ROOT + $INDEX_ALLOCATION)
+    // =========================================================================
+    bool TryParseNtfsBpb(uint64_t partLba, const uint8_t* bpb) {
+        uint16_t bytesPerSec = Rd16LE(bpb + 11);
+        uint8_t  spcRaw      = bpb[13];
+        uint64_t totSec64    = Rd64LE(bpb + 40);
+        uint64_t mftClus     = Rd64LE(bpb + 48);
+        int8_t   cpmr        = static_cast<int8_t>(bpb[64]);
+        int8_t   cpib        = static_cast<int8_t>(bpb[68]);
+
+        if (bytesPerSec < 512 || bytesPerSec > 4096 || (bytesPerSec & (bytesPerSec - 1)) != 0) return false;
+        uint32_t clusBytes = 0;
+        if (spcRaw > 0 && spcRaw <= 128 && (spcRaw & (spcRaw - 1)) == 0) {
+            clusBytes = static_cast<uint32_t>(bytesPerSec) * spcRaw;
+        } else if (spcRaw >= 240) {
+            clusBytes = 1u << (256 - spcRaw);
+        } else {
+            return false;
+        }
+        if (clusBytes < kSectorSize || (clusBytes % kSectorSize) != 0 || totSec64 == 0 || mftClus == 0) {
+            return false;
+        }
+
+        uint32_t mftRecBytes = (cpmr > 0)
+            ? (static_cast<uint32_t>(cpmr) * clusBytes)
+            : ((cpmr < 0 && cpmr >= -16) ? (1u << (-cpmr)) : 0u);
+        if (mftRecBytes < 512 || mftRecBytes > 4096 || (mftRecBytes % kSectorSize) != 0) {
+            return false;
+        }
+
+        uint32_t idxBlkBytes = (cpib > 0)
+            ? (static_cast<uint32_t>(cpib) * clusBytes)
+            : ((cpib < 0 && cpib >= -16) ? (1u << (-cpib)) : 4096u);
+        if (idxBlkBytes < 512 || idxBlkBytes > 65536 || (idxBlkBytes % kSectorSize) != 0) {
+            idxBlkBytes = 4096u;
+        }
+
+        partStartLba_      = partLba;
+        secPerClus_        = clusBytes / kSectorSize;
+        mftRecordBytes_    = mftRecBytes;
+        ntfsIndexBlkBytes_ = idxBlkBytes;
+        mftExtents_.clear();
+
+        // Leer MFT Record 0 ($MFT) para obtener los extents de toda la tabla MFT
+        uint64_t mft0Lba = partStartLba_ + mftClus * secPerClus_;
+        uint32_t recSecs = mftRecordBytes_ / kSectorSize;
+        std::vector<uint8_t> rec0(mftRecordBytes_);
+        if (!raw_.ReadSectors(mft0Lba, recSecs, rec0.data())) return false;
+        if (std::memcmp(rec0.data(), "FILE", 4) != 0) return false;
+        if (!ApplyNtfsUsaFixup(rec0.data(), mftRecordBytes_)) return false;
+
+        uint16_t attrOff = Rd16LE(rec0.data() + 20);
+        while (attrOff + 24 <= mftRecordBytes_) {
+            const uint8_t* a = rec0.data() + attrOff;
+            uint32_t aType = Rd32LE(a);
+            if (aType == 0xFFFFFFFFu) break;
+            uint32_t aLen = Rd32LE(a + 4);
+            if (aLen < 24 || attrOff + aLen > mftRecordBytes_) break;
+
+            uint8_t nonRes  = a[8];
+            uint8_t nameLen = a[9];
+            if (aType == 0x80u && nameLen == 0 && nonRes == 1) {
+                uint16_t runOff = Rd16LE(a + 32);
+                if (runOff < aLen) {
+                    DecodeNtfsDataRuns(a + runOff, aLen - runOff, mftExtents_);
+                }
+            }
+            attrOff += aLen;
+        }
+
+        if (mftExtents_.empty()) return false;
+        fsKind_ = FsKind::NTFS;
+        return true;
+    }
+
+    static bool ApplyNtfsUsaFixup(uint8_t* rec, uint32_t recSize) {
+        uint16_t usaOff = Rd16LE(rec + 4);
+        uint16_t usaCnt = Rd16LE(rec + 6);
+        uint32_t numSecs = recSize / kSectorSize;
+        if (usaCnt < numSecs + 1 || static_cast<uint32_t>(usaOff) + static_cast<uint32_t>(usaCnt) * 2u > recSize) {
+            return false;
+        }
+        uint16_t usn = Rd16LE(rec + usaOff);
+        for (uint32_t s = 0; s < numSecs; ++s) {
+            uint8_t* tail = rec + (s + 1) * kSectorSize - 2;
+            if (Rd16LE(tail) != usn) return false;
+            const uint8_t* repl = rec + usaOff + (s + 1) * 2;
+            tail[0] = repl[0];
+            tail[1] = repl[1];
+        }
+        return true;
+    }
+
+    bool DecodeNtfsDataRuns(const uint8_t* runData, uint32_t maxLen, std::vector<UsbExtent>& outExtents) const {
+        uint32_t pos = 0;
+        int64_t curLcn = 0;
+        const uint64_t clusBytes = ClusterBytes();
+
+        while (pos < maxLen) {
+            uint8_t hdr = runData[pos++];
+            if (hdr == 0) break;
+            uint32_t lenBytes = hdr & 0x0Fu;
+            uint32_t offBytes = (hdr >> 4) & 0x0Fu;
+            if (lenBytes == 0 || lenBytes > 8 || offBytes > 8 || pos + lenBytes + offBytes > maxLen) {
+                return false;
+            }
+
+            uint64_t runClusters = 0;
+            for (uint32_t i = 0; i < lenBytes; ++i) {
+                runClusters |= (static_cast<uint64_t>(runData[pos + i]) << (i * 8));
+            }
+            pos += lenBytes;
+
+            if (offBytes == 0) {
+                // Tramo sparse (ceros)
+                UsbExtent ext;
+                ext.lba = 0;
+                ext.byteLen = runClusters * clusBytes;
+                outExtents.push_back(ext);
+            } else {
+                uint64_t rawDelta = 0;
+                for (uint32_t i = 0; i < offBytes; ++i) {
+                    rawDelta |= (static_cast<uint64_t>(runData[pos + i]) << (i * 8));
+                }
+                if (runData[pos + offBytes - 1] & 0x80u) {
+                    for (uint32_t i = offBytes; i < 8; ++i) {
+                        rawDelta |= (0xFFULL << (i * 8));
+                    }
+                }
+                pos += offBytes;
+                curLcn += static_cast<int64_t>(rawDelta);
+                if (curLcn < 0) return false;
+
+                UsbExtent ext;
+                ext.lba = partStartLba_ + static_cast<uint64_t>(curLcn) * secPerClus_;
+                ext.byteLen = runClusters * clusBytes;
+                outExtents.push_back(ext);
+            }
+        }
+        return true;
+    }
+
+    bool ReadBytesFromExtents(const std::vector<UsbExtent>& extents,
+                              uint64_t byteOffset,
+                              uint32_t byteLen,
+                              uint8_t* dst) {
+        uint64_t curOff = 0;
+        uint32_t got = 0;
+        for (const auto& ext : extents) {
+            if (byteOffset >= curOff + ext.byteLen) {
+                curOff += ext.byteLen;
+                continue;
+            }
+            uint64_t offInExt = (byteOffset > curOff) ? (byteOffset - curOff) : 0;
+            uint64_t avail = ext.byteLen - offInExt;
+            uint32_t take = static_cast<uint32_t>(std::min<uint64_t>(byteLen - got, avail));
+
+            if (ext.lba == 0) {
+                std::memset(dst + got, 0, take);
+            } else if ((offInExt % kSectorSize) == 0 && (take % kSectorSize) == 0) {
+                if (!raw_.ReadSectors(ext.lba + (offInExt / kSectorSize), take / kSectorSize, dst + got)) {
+                    return false;
+                }
+            } else {
+                uint64_t firstSec = offInExt / kSectorSize;
+                uint64_t lastSec  = (offInExt + take - 1) / kSectorSize;
+                uint32_t secCnt   = static_cast<uint32_t>(lastSec - firstSec + 1);
+                std::vector<uint8_t> tmp(static_cast<size_t>(secCnt) * kSectorSize);
+                if (!raw_.ReadSectors(ext.lba + firstSec, secCnt, tmp.data())) {
+                    return false;
+                }
+                std::memcpy(dst + got, tmp.data() + (offInExt % kSectorSize), take);
+            }
+
+            got += take;
+            byteOffset += take;
+            curOff += ext.byteLen;
+            if (got >= byteLen) return true;
+        }
+        return false;
+    }
+
+    bool ReadNtfsMftRecord(uint64_t recNum, std::vector<uint8_t>& outRec) {
+        outRec.resize(mftRecordBytes_);
+        uint64_t byteOff = recNum * static_cast<uint64_t>(mftRecordBytes_);
+        if (!ReadBytesFromExtents(mftExtents_, byteOff, mftRecordBytes_, outRec.data())) {
+            return false;
+        }
+        if (std::memcmp(outRec.data(), "FILE", 4) != 0) return false;
+        return ApplyNtfsUsaFixup(outRec.data(), mftRecordBytes_);
+    }
+
+    static void ParseNtfsIndexNode(const uint8_t* nodeHdr,
+                                   uint32_t maxNodeBytes,
+                                   uint64_t selfMftRec,
+                                   std::vector<uint64_t>& ioChildRecs) {
+        if (maxNodeBytes < 16) return;
+        uint32_t entriesOff = Rd32LE(nodeHdr + 0);
+        uint32_t totalSize  = Rd32LE(nodeHdr + 4);
+        if (totalSize > maxNodeBytes) totalSize = maxNodeBytes;
+
+        uint32_t pos = entriesOff;
+        while (pos + 16 <= totalSize) {
+            const uint8_t* ent = nodeHdr + pos;
+            uint64_t fileRef = Rd64LE(ent + 0);
+            uint16_t entLen  = Rd16LE(ent + 8);
+            uint16_t keyLen  = Rd16LE(ent + 10);
+            uint32_t flags   = Rd32LE(ent + 12);
+
+            if (entLen < 16 || pos + entLen > totalSize) break;
+            if (flags & 0x02u) break; // Ultima entrada del nodo
+
+            uint64_t childMft = fileRef & 0x0000FFFFFFFFFFFFULL;
+            if (keyLen >= 66 && childMft >= 16 && childMft != selfMftRec) {
+                if (std::find(ioChildRecs.begin(), ioChildRecs.end(), childMft) == ioChildRecs.end()) {
+                    ioChildRecs.push_back(childMft);
+                }
+            }
+            pos += entLen;
+        }
+    }
+
+    void CollectNtfsExtensionRecords(const std::vector<uint8_t>& baseRec,
+                                     uint64_t baseMftNum,
+                                     uint32_t wantAttrType,
+                                     std::vector<uint64_t>& outExtRecs) {
+        uint16_t attrOff = Rd16LE(baseRec.data() + 20);
+        while (attrOff + 24 <= mftRecordBytes_) {
+            const uint8_t* a = baseRec.data() + attrOff;
+            uint32_t aType = Rd32LE(a);
+            if (aType == 0xFFFFFFFFu) break;
+            uint32_t aLen = Rd32LE(a + 4);
+            if (aLen < 24 || attrOff + aLen > mftRecordBytes_) break;
+
+            if (aType == 0x20u) { // $ATTRIBUTE_LIST
+                std::vector<uint8_t> listBuf;
+                if (a[8] == 0) {
+                    uint32_t valLen = Rd32LE(a + 16);
+                    uint16_t valOff = Rd16LE(a + 20);
+                    if (static_cast<uint32_t>(valOff) + valLen <= aLen) {
+                        listBuf.assign(a + valOff, a + valOff + valLen);
+                    }
+                } else {
+                    uint16_t runOff = Rd16LE(a + 32);
+                    uint64_t realSz = Rd64LE(a + 48);
+                    std::vector<UsbExtent> listExts;
+                    if (runOff < aLen && realSz > 0 && realSz <= 262144 &&
+                        DecodeNtfsDataRuns(a + runOff, aLen - runOff, listExts)) {
+                        listBuf.resize(static_cast<size_t>(realSz));
+                        if (!ReadBytesFromExtents(listExts, 0, static_cast<uint32_t>(realSz), listBuf.data())) {
+                            listBuf.clear();
+                        }
+                    }
+                }
+
+                struct VcnRecPair { uint64_t vcn; uint64_t rec; };
+                std::vector<VcnRecPair> pairs;
+                size_t p = 0;
+                while (p + 26 <= listBuf.size()) {
+                    uint32_t entType = Rd32LE(listBuf.data() + p);
+                    uint16_t entLen  = Rd16LE(listBuf.data() + p + 4);
+                    uint8_t  nameLen = listBuf[p + 6];
+                    if (entLen < 26 || p + entLen > listBuf.size()) break;
+                    uint64_t startVcn = Rd64LE(listBuf.data() + p + 8);
+                    uint64_t refMft   = Rd64LE(listBuf.data() + p + 16) & 0x0000FFFFFFFFFFFFULL;
+                    if (entType == wantAttrType && refMft != baseMftNum) {
+                        if (wantAttrType != 0x80u || nameLen == 0) {
+                            pairs.push_back({startVcn, refMft});
+                        }
+                    }
+                    p += entLen;
+                }
+                std::sort(pairs.begin(), pairs.end(), [](const VcnRecPair& x, const VcnRecPair& y) {
+                    return x.vcn < y.vcn;
+                });
+                for (const auto& pr : pairs) {
+                    if (std::find(outExtRecs.begin(), outExtRecs.end(), pr.rec) == outExtRecs.end()) {
+                        outExtRecs.push_back(pr.rec);
+                    }
+                }
+            }
+            attrOff += aLen;
+        }
+    }
+
+    bool ListNtfsDirectory(uint64_t dirMftRec, std::vector<DirEntry>& outEntries) {
+        outEntries.clear();
+        std::vector<uint8_t> dirRec;
+        if (!ReadNtfsMftRecord(dirMftRec, dirRec)) return false;
+
+        uint32_t idxBlockSize = ntfsIndexBlkBytes_;
+        std::vector<uint64_t> childRecs;
+        std::vector<UsbExtent> idxAllocExtents;
+
+        auto parseDirAttrs = [&](const std::vector<uint8_t>& rec) {
+            uint16_t attrOff = Rd16LE(rec.data() + 20);
+            while (attrOff + 24 <= mftRecordBytes_) {
+                const uint8_t* a = rec.data() + attrOff;
+                uint32_t aType = Rd32LE(a);
+                if (aType == 0xFFFFFFFFu) break;
+                uint32_t aLen = Rd32LE(a + 4);
+                if (aLen < 24 || attrOff + aLen > mftRecordBytes_) break;
+
+                uint8_t nonRes = a[8];
+                if (aType == 0x90u && nonRes == 0) { // $INDEX_ROOT
+                    uint32_t valLen = Rd32LE(a + 16);
+                    uint16_t valOff = Rd16LE(a + 20);
+                    if (valLen >= 32 && static_cast<uint32_t>(valOff) + valLen <= aLen) {
+                        const uint8_t* ir = a + valOff;
+                        uint32_t bsz = Rd32LE(ir + 8);
+                        if (bsz >= 512 && bsz <= 65536 && (bsz % kSectorSize) == 0) {
+                            idxBlockSize = bsz;
+                        }
+                        ParseNtfsIndexNode(ir + 16, valLen - 16, dirMftRec, childRecs);
+                    }
+                } else if (aType == 0xA0u && nonRes == 1) { // $INDEX_ALLOCATION
+                    uint16_t runOff = Rd16LE(a + 32);
+                    if (runOff < aLen) {
+                        DecodeNtfsDataRuns(a + runOff, aLen - runOff, idxAllocExtents);
+                    }
+                }
+                attrOff += aLen;
+            }
+        };
+
+        parseDirAttrs(dirRec);
+
+        std::vector<uint64_t> extDirRecs;
+        CollectNtfsExtensionRecords(dirRec, dirMftRec, 0xA0u, extDirRecs);
+        for (uint64_t extMft : extDirRecs) {
+            std::vector<uint8_t> extRec;
+            if (ReadNtfsMftRecord(extMft, extRec)) {
+                parseDirAttrs(extRec);
+            }
+        }
+
+        if (!idxAllocExtents.empty() && idxBlockSize >= 512) {
+            uint64_t totalIdxBytes = 0;
+            for (const auto& e : idxAllocExtents) totalIdxBytes += e.byteLen;
+            totalIdxBytes = std::min<uint64_t>(totalIdxBytes, 4ULL * 1024 * 1024); // Cap seguridad 4 MB por directorio
+
+            std::vector<uint8_t> indxBlk(idxBlockSize);
+            for (uint64_t off = 0; off + idxBlockSize <= totalIdxBytes; off += idxBlockSize) {
+                if (!ReadBytesFromExtents(idxAllocExtents, off, idxBlockSize, indxBlk.data())) break;
+                if (std::memcmp(indxBlk.data(), "INDX", 4) != 0) continue;
+                if (!ApplyNtfsUsaFixup(indxBlk.data(), idxBlockSize)) continue;
+                ParseNtfsIndexNode(indxBlk.data() + 24, idxBlockSize - 24, dirMftRec, childRecs);
+            }
+        }
+
+        for (uint64_t childMft : childRecs) {
+            std::vector<uint8_t> cRec;
+            if (!ReadNtfsMftRecord(childMft, cRec)) continue;
+            uint16_t recFlags = Rd16LE(cRec.data() + 22);
+            if ((recFlags & 0x01u) == 0) continue; // No esta en uso
+
+            DirEntry de;
+            de.isDir = (recFlags & 0x02u) != 0;
+            de.ntfsMftRec = childMft;
+            int bestNameRank = -1;
+
+            auto parseChildAttrs = [&](const std::vector<uint8_t>& rec) {
+                uint16_t attrOff = Rd16LE(rec.data() + 20);
+                while (attrOff + 24 <= mftRecordBytes_) {
+                    const uint8_t* a = rec.data() + attrOff;
+                    uint32_t aType = Rd32LE(a);
+                    if (aType == 0xFFFFFFFFu) break;
+                    uint32_t aLen = Rd32LE(a + 4);
+                    if (aLen < 24 || attrOff + aLen > mftRecordBytes_) break;
+
+                    uint8_t nonRes  = a[8];
+                    uint8_t nameLen = a[9];
+
+                    if (aType == 0x30u && nonRes == 0) { // $FILE_NAME
+                        uint32_t valLen = Rd32LE(a + 16);
+                        uint16_t valOff = Rd16LE(a + 20);
+                        if (valLen >= 66 && static_cast<uint32_t>(valOff) + valLen <= aLen) {
+                            const uint8_t* fn = a + valOff;
+                            uint64_t parentRef = Rd64LE(fn + 0) & 0x0000FFFFFFFFFFFFULL;
+                            uint32_t fnFlags   = Rd32LE(fn + 56);
+                            uint8_t  fnChars   = fn[64];
+                            uint8_t  fnNs      = fn[65];
+
+                            if ((fnFlags & 0x10000000u) != 0) de.isDir = true;
+                            int rank = (parentRef == dirMftRec ? 10 : 0) + ((fnNs != 2) ? 5 : 1);
+                            if (rank > bestNameRank && 66u + static_cast<uint32_t>(fnChars) * 2u <= valLen) {
+                                std::string candidate;
+                                candidate.reserve(fnChars);
+                                for (uint8_t k = 0; k < fnChars; ++k) {
+                                    uint16_t ch = Rd16LE(fn + 66 + k * 2);
+                                    candidate.push_back(FoldUtf16ToAscii(ch));
+                                }
+                                if (!candidate.empty()) {
+                                    de.name = std::move(candidate);
+                                    bestNameRank = rank;
+                                }
+                            }
+                        }
+                    } else if (aType == 0x80u && nameLen == 0 && !de.isDir) { // $DATA (stream principal sin nombre)
+                        if (nonRes == 0) {
+                            uint32_t valLen = Rd32LE(a + 16);
+                            uint16_t valOff = Rd16LE(a + 20);
+                            if (static_cast<uint32_t>(valOff) + valLen <= aLen) {
+                                de.size = valLen;
+                                de.residentData.assign(a + valOff, a + valOff + valLen);
+                            }
+                        } else {
+                            uint64_t startVcn = Rd64LE(a + 16);
+                            uint16_t runOff   = Rd16LE(a + 32);
+                            uint64_t realSz   = Rd64LE(a + 48);
+                            if (startVcn == 0) {
+                                de.size = realSz;
+                            }
+                            if (runOff < aLen) {
+                                DecodeNtfsDataRuns(a + runOff, aLen - runOff, de.extents);
+                            }
+                        }
+                    }
+                    attrOff += aLen;
+                }
+            };
+
+            parseChildAttrs(cRec);
+
+            // Si el archivo tiene $ATTRIBUTE_LIST (0x20), leer records adicionales para $FILE_NAME y $DATA
+            std::vector<uint64_t> fnExtRecs;
+            if (de.name.empty()) {
+                CollectNtfsExtensionRecords(cRec, childMft, 0x30u, fnExtRecs);
+                for (uint64_t r : fnExtRecs) {
+                    std::vector<uint8_t> er;
+                    if (ReadNtfsMftRecord(r, er)) parseChildAttrs(er);
+                }
+            }
+            if (!de.isDir) {
+                std::vector<uint64_t> dataExtRecs;
+                CollectNtfsExtensionRecords(cRec, childMft, 0x80u, dataExtRecs);
+                for (uint64_t r : dataExtRecs) {
+                    std::vector<uint8_t> er;
+                    if (ReadNtfsMftRecord(r, er)) parseChildAttrs(er);
+                }
+            }
+
+            if (de.name.empty() || de.name == "." || de.name == ".." || de.name[0] == '$') continue;
+            outEntries.push_back(std::move(de));
+        }
+        return true;
+    }
+
+    // =========================================================================
+    // Funciones comunes de navegacion de directorios y FAT
+    // =========================================================================
     bool IsValidCluster(uint32_t c) const {
         return c >= 2 && c < (clusterCount_ + 2);
     }
 
     bool IsEndOfChain(uint32_t val) const {
-        return isFat32_ ? ((val & 0x0FFFFFFFu) >= 0x0FFFFFF8u) : (val >= 0xFFF8u);
+        switch (fsKind_) {
+            case FsKind::FAT12: return val >= 0x0FF8u || val < 2;
+            case FsKind::FAT16: return val >= 0xFFF8u || val < 2;
+            case FsKind::FAT32: return (val & 0x0FFFFFFFu) >= 0x0FFFFFF8u || (val & 0x0FFFFFFFu) < 2;
+            case FsKind::ExFAT: return val >= 0xFFFFFFF8u || val < 2;
+            default:            return true;
+        }
     }
 
     uint64_t ClusterToLba(uint32_t cluster) const {
@@ -585,25 +1218,52 @@ private:
     }
 
     uint32_t GetFatEntry(uint32_t cluster) {
-        if (!IsValidCluster(cluster)) return 0x0FFFFFFFu;
-        uint32_t byteOff = isFat32_ ? (cluster * 4u) : (cluster * 2u);
+        if (!IsValidCluster(cluster)) return 0xFFFFFFFFu;
+
+        if (fsKind_ == FsKind::FAT12) {
+            uint32_t byteOff = cluster + (cluster / 2u);
+            uint32_t fatSec  = byteOff / kSectorSize;
+            uint32_t secOff  = byteOff % kSectorSize;
+            if (fatSec >= fatSectors_) return 0x0FFFu;
+
+            // La tabla FAT12 completa cabe en fatCache_ desde el sector 0
+            if (fatCacheBaseSec_ != 0 || fatCacheSecCount_ == 0) {
+                uint32_t toRead = std::min<uint32_t>(kFatCacheSectors, fatSectors_);
+                if (!raw_.ReadSectors(fatStartLba_, toRead, fatCache_)) {
+                    return 0x0FFFu;
+                }
+                fatCacheBaseSec_ = 0;
+                fatCacheSecCount_ = toRead;
+            }
+            if (byteOff + 1 >= fatCacheSecCount_ * kSectorSize) return 0x0FFFu;
+            uint16_t v16 = Rd16LE(fatCache_ + fatSec * kSectorSize + secOff);
+            return (cluster & 1u) ? (v16 >> 4) : (v16 & 0x0FFFu);
+        }
+
+        uint32_t byteOff = (fsKind_ == FsKind::FAT16) ? (cluster * 2u) : (cluster * 4u);
         uint32_t fatSec  = byteOff / kSectorSize;
         uint32_t secOff  = byteOff % kSectorSize;
-        if (fatSec >= fatSectors_) return 0x0FFFFFFFu;
+        if (fatSec >= fatSectors_) return 0xFFFFFFFFu;
 
         if (fatCacheBaseSec_ == UINT32_MAX ||
             fatSec < fatCacheBaseSec_ ||
             fatSec >= fatCacheBaseSec_ + fatCacheSecCount_) {
             uint32_t toRead = std::min<uint32_t>(kFatCacheSectors, fatSectors_ - fatSec);
             if (!raw_.ReadSectors(fatStartLba_ + fatSec, toRead, fatCache_)) {
-                return 0x0FFFFFFFu;
+                return 0xFFFFFFFFu;
             }
             fatCacheBaseSec_ = fatSec;
             fatCacheSecCount_ = toRead;
         }
 
         const uint8_t* ptr = fatCache_ + static_cast<size_t>(fatSec - fatCacheBaseSec_) * kSectorSize + secOff;
-        return isFat32_ ? (Rd32LE(ptr) & 0x0FFFFFFFu) : static_cast<uint32_t>(Rd16LE(ptr));
+        if (fsKind_ == FsKind::FAT16) {
+            return static_cast<uint32_t>(Rd16LE(ptr));
+        }
+        if (fsKind_ == FsKind::ExFAT) {
+            return Rd32LE(ptr);
+        }
+        return Rd32LE(ptr) & 0x0FFFFFFFu;
     }
 
     uint32_t CountContiguousClusters(uint32_t startCluster, uint32_t maxClusters, uint32_t& outNextCluster) {
@@ -657,31 +1317,131 @@ private:
         return out;
     }
 
-    bool ListDirectory(uint32_t startCluster, bool isFat16Root, std::vector<DirEntry>& outEntries) {
-        outEntries.clear();
+    bool ReadDirectoryBytes(uint32_t startCluster,
+                            bool isFixedFatRoot,
+                            bool exfatContiguous,
+                            uint64_t dirByteLen,
+                            std::vector<uint8_t>& outBuf) {
+        outBuf.clear();
+        if (isFixedFatRoot) {
+            outBuf.resize(static_cast<size_t>(rootDirSectors_) * kSectorSize);
+            return raw_.ReadSectors(rootDirLba_, rootDirSectors_, outBuf.data());
+        }
 
-        std::vector<uint8_t> buf;
-        if (isFat16Root) {
-            buf.resize(static_cast<size_t>(rootDirSectors_) * kSectorSize);
-            if (!raw_.ReadSectors(rootDirLba_, rootDirSectors_, buf.data())) return false;
-        } else {
-            uint32_t clus = startCluster;
-            uint32_t clusBytes = ClusterBytes();
-            uint32_t hops = 0;
-            while (IsValidCluster(clus) && hops < 256) {
-                size_t oldSz = buf.size();
-                buf.resize(oldSz + clusBytes);
-                if (!raw_.ReadSectors(ClusterToLba(clus), secPerClus_, buf.data() + oldSz)) {
+        uint32_t clus = startCluster;
+        uint32_t clusBytes = ClusterBytes();
+        uint32_t maxClustersToRead = 256;
+        if (exfatContiguous && dirByteLen > 0) {
+            maxClustersToRead = static_cast<uint32_t>(
+                std::min<uint64_t>(256, (dirByteLen + clusBytes - 1) / clusBytes));
+        }
+
+        uint32_t hops = 0;
+        while (IsValidCluster(clus) && hops < maxClustersToRead) {
+            // Para clusters gigantes en exFAT (ej. 1 MB - 4 MB), leemos en bloques de hasta 128 KB
+            // y nos detenemos si encontramos fin de directorio (entryType == 0x00)
+            uint32_t secDone = 0;
+            bool hitEndMarker = false;
+            while (secDone < secPerClus_) {
+                uint32_t secChunk = std::min<uint32_t>(256u, secPerClus_ - secDone);
+                uint32_t chunkBytes = secChunk * kSectorSize;
+                size_t oldSz = outBuf.size();
+                outBuf.resize(oldSz + chunkBytes);
+                if (!raw_.ReadSectors(ClusterToLba(clus) + secDone, secChunk, outBuf.data() + oldSz)) {
                     return false;
                 }
+                for (size_t off = oldSz; off < outBuf.size(); off += 32) {
+                    if (outBuf[off] == 0x00) {
+                        hitEndMarker = true;
+                        break;
+                    }
+                }
+                secDone += secChunk;
+                if (hitEndMarker || outBuf.size() >= 1024 * 1024) break;
+            }
+            if (hitEndMarker || outBuf.size() >= 1024 * 1024) break;
+
+            ++hops;
+            if (exfatContiguous) {
+                if (hops >= maxClustersToRead) break;
+                ++clus;
+            } else {
                 uint32_t nxt = GetFatEntry(clus);
                 if (IsEndOfChain(nxt)) break;
                 clus = nxt;
-                ++hops;
             }
         }
+        return !outBuf.empty();
+    }
 
-        // Reconstruccion VFAT LFN (hasta 20 segmentos de 13 caracteres UTF-16LE)
+    bool ListExFatDirectory(uint32_t startCluster,
+                            bool exfatContiguous,
+                            uint64_t dirByteLen,
+                            std::vector<DirEntry>& outEntries) {
+        outEntries.clear();
+        std::vector<uint8_t> buf;
+        if (!ReadDirectoryBytes(startCluster, false, exfatContiguous, dirByteLen, buf)) {
+            return false;
+        }
+
+        size_t totalEnt = buf.size() / 32;
+        for (size_t i = 0; i < totalEnt; ++i) {
+            const uint8_t* e = buf.data() + i * 32;
+            uint8_t etype = e[0];
+            if (etype == 0x00) break;
+            if (etype != 0x85) continue; // File Directory Entry activa
+
+            uint8_t secCount = e[1];
+            uint16_t fileAttr = Rd16LE(e + 4);
+            if (secCount < 2 || i + secCount >= totalEnt) continue;
+
+            const uint8_t* s = buf.data() + (i + 1) * 32;
+            if (s[0] != 0xC0) continue; // Stream Extension Directory Entry
+
+            uint8_t genFlags = s[1];
+            uint8_t nameChars = s[3];
+            uint64_t validDataLen = Rd64LE(s + 8);
+            uint32_t firstClus = Rd32LE(s + 20);
+            uint64_t dataLen = Rd64LE(s + 24);
+
+            std::string name;
+            name.reserve(nameChars);
+            uint8_t charsLeft = nameChars;
+
+            for (uint8_t fnIdx = 2; fnIdx <= secCount && charsLeft > 0; ++fnIdx) {
+                const uint8_t* fn = buf.data() + (i + fnIdx) * 32;
+                if (fn[0] != 0xC1) break; // File Name Directory Entry
+                for (int k = 0; k < 15 && charsLeft > 0; ++k) {
+                    uint16_t ch = Rd16LE(fn + 2 + k * 2);
+                    if (ch == 0x0000) { charsLeft = 0; break; }
+                    name.push_back(FoldUtf16ToAscii(ch));
+                    --charsLeft;
+                }
+            }
+
+            i += secCount;
+            if (name.empty() || name == "." || name == "..") continue;
+
+            DirEntry de;
+            de.name = std::move(name);
+            de.isDir = (fileAttr & 0x10u) != 0;
+            de.startCluster = firstClus;
+            de.exfatContiguous = (genFlags & 0x02u) != 0; // NoFatChain bit
+            uint64_t effectiveLen = (validDataLen > 0) ? validDataLen : dataLen;
+            de.size = de.isDir ? 0ULL : effectiveLen;
+            de.dirByteLen = de.isDir ? dataLen : 0ULL;
+            outEntries.push_back(std::move(de));
+        }
+        return true;
+    }
+
+    bool ListFatDirectory(uint32_t startCluster, bool isFixedFatRoot, std::vector<DirEntry>& outEntries) {
+        outEntries.clear();
+        std::vector<uint8_t> buf;
+        if (!ReadDirectoryBytes(startCluster, isFixedFatRoot, false, 0, buf)) {
+            return false;
+        }
+
         std::string lfnParts[20];
         bool lfnActive = false;
         uint8_t lfnChecksum = 0;
@@ -725,7 +1485,7 @@ private:
                 continue;
             }
 
-            if (attr & 0x08u) { // Volume ID
+            if (attr & 0x08u) {
                 lfnActive = false;
                 continue;
             }
@@ -746,7 +1506,7 @@ private:
             DirEntry de;
             de.name = std::move(name);
             de.isDir = (attr & 0x10u) != 0;
-            uint32_t hi = isFat32_ ? static_cast<uint32_t>(Rd16LE(e + 20)) : 0u;
+            uint32_t hi = (fsKind_ == FsKind::FAT32) ? static_cast<uint32_t>(Rd16LE(e + 20)) : 0u;
             uint32_t lo = static_cast<uint32_t>(Rd16LE(e + 26));
             de.startCluster = (hi << 16) | lo;
             de.size = de.isDir ? 0ULL : static_cast<uint64_t>(Rd32LE(e + 28));
@@ -756,7 +1516,38 @@ private:
         return true;
     }
 
-    void CollectFilesRecursive(uint32_t dirCluster,
+    bool ListRootDirectory(std::vector<DirEntry>& outEntries) {
+        switch (fsKind_) {
+            case FsKind::FAT12:
+            case FsKind::FAT16:
+                return ListFatDirectory(0, true, outEntries);
+            case FsKind::FAT32:
+                return ListFatDirectory(rootCluster_, false, outEntries);
+            case FsKind::ExFAT:
+                return ListExFatDirectory(rootCluster_, false, 0, outEntries);
+            case FsKind::NTFS:
+                return ListNtfsDirectory(5, outEntries); // MFT Record 5 = Root directory en NTFS
+            default:
+                return false;
+        }
+    }
+
+    bool ListSubDirectory(const DirEntry& dir, std::vector<DirEntry>& outEntries) {
+        switch (fsKind_) {
+            case FsKind::FAT12:
+            case FsKind::FAT16:
+            case FsKind::FAT32:
+                return ListFatDirectory(dir.startCluster, false, outEntries);
+            case FsKind::ExFAT:
+                return ListExFatDirectory(dir.startCluster, dir.exfatContiguous, dir.dirByteLen, outEntries);
+            case FsKind::NTFS:
+                return ListNtfsDirectory(dir.ntfsMftRec, outEntries);
+            default:
+                return false;
+        }
+    }
+
+    void CollectFilesRecursive(const DirEntry& dir,
                                const std::string& subRel,
                                int depth,
                                std::vector<UsbFile>& outFiles,
@@ -764,13 +1555,13 @@ private:
                                bool& outLooksLikeWup) {
         if (depth > 4) return;
         std::vector<DirEntry> entries;
-        if (!ListDirectory(dirCluster, false, entries)) return;
+        if (!ListSubDirectory(dir, entries)) return;
 
         for (const auto& e : entries) {
             if (e.name.empty() || e.name[0] == '.') continue;
             std::string rel = subRel.empty() ? e.name : (subRel + "/" + e.name);
             if (e.isDir) {
-                CollectFilesRecursive(e.startCluster, rel, depth + 1, outFiles, outTotalBytes, outLooksLikeWup);
+                CollectFilesRecursive(e, rel, depth + 1, outFiles, outTotalBytes, outLooksLikeWup);
             } else {
                 if (EndsWithCI(e.name, ".tmd") || EndsWithCI(e.name, ".tik") || EndsWithCI(e.name, ".app")) {
                     outLooksLikeWup = true;
@@ -779,6 +1570,9 @@ private:
                 uf.subPath = std::move(rel);
                 uf.startCluster = e.startCluster;
                 uf.size = e.size;
+                uf.exfatContiguous = e.exfatContiguous;
+                uf.extents = e.extents;
+                uf.residentData = e.residentData;
                 outTotalBytes += uf.size;
                 outFiles.push_back(std::move(uf));
             }
@@ -787,7 +1581,7 @@ private:
 
     FsaRawDevice raw_;
     bool mounted_ = false;
-    bool isFat32_ = true;
+    FsKind fsKind_ = FsKind::None;
 
     uint64_t partStartLba_ = 0;
     uint32_t secPerClus_ = 1;
@@ -798,6 +1592,10 @@ private:
     uint32_t firstDataSec_ = 0;
     uint32_t rootCluster_ = 2;
     uint32_t clusterCount_ = 0;
+
+    uint32_t mftRecordBytes_ = 1024;
+    uint32_t ntfsIndexBlkBytes_ = 4096;
+    std::vector<UsbExtent> mftExtents_;
 
     uint8_t* fatCache_ = nullptr;
     uint32_t fatCacheBaseSec_ = UINT32_MAX;

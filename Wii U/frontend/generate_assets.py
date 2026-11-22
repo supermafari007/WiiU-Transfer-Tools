@@ -6,6 +6,8 @@ Genera:
      y el icono de Wii U GamePad + 3 ondas Wi-Fi compuesto en RGBX32 (kGamepadIconRgbx).
 """
 
+import struct
+import wave
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
@@ -124,7 +126,7 @@ def make_splash_image(w: int, h: int, is_icon: bool) -> Image.Image:
         f_sub = ImageFont.load_default()
 
     title = "Wii U Transfer Tools"
-    sub = "Desarrollado por El Diuca  -  Instalador WUP Red / USB"
+    sub = "Desarrollado por El Diuca  -  Ver. 2.0.0  (Modo USB / Modo Red)"
     tb = draw.textbbox((0, 0), title, font=f_title)
     sb = draw.textbbox((0, 0), sub, font=f_sub)
     draw.text(((w - (tb[2] - tb[0])) // 2, int(h * 0.59)), title, fill=COL_WHITE, font=f_title)
@@ -239,18 +241,211 @@ def generate_font_atlas_hpp(out_hpp: Path) -> None:
     out_hpp.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+# Tablas IMA ADPCM (4 bits por muestra, compresión 4:1 desde PCM16)
+IMA_INDEX_TABLE = (-1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8)
+IMA_STEP_TABLE = (
+    7, 8, 9, 10, 11, 12, 13, 14, 16, 17,
+    19, 21, 23, 25, 28, 31, 34, 37, 41, 45,
+    50, 55, 60, 66, 73, 80, 88, 97, 107, 118,
+    130, 143, 157, 173, 190, 209, 230, 253, 279, 307,
+    337, 371, 408, 449, 494, 544, 598, 658, 724, 796,
+    876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066,
+    2272, 2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358,
+    5894, 6484, 7132, 7845, 8630, 9493, 10442, 11487, 12635, 13899,
+    15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767,
+)
+
+
+def encode_ima_channel(samples: list[int]) -> bytes:
+    pred = 0
+    idx = 0
+    out = bytearray((len(samples) + 1) // 2)
+    out_pos = 0
+    low_nibble = True
+
+    for s in samples:
+        step = IMA_STEP_TABLE[idx]
+        diff = s - pred
+        nib = 8 if diff < 0 else 0
+        if diff < 0:
+            diff = -diff
+
+        vpdiff = step >> 3
+        if diff >= step:
+            nib |= 4
+            diff -= step
+            vpdiff += step
+        step >>= 1
+        if diff >= step:
+            nib |= 2
+            diff -= step
+            vpdiff += step
+        step >>= 1
+        if diff >= step:
+            nib |= 1
+            vpdiff += step
+
+        if nib & 8:
+            pred -= vpdiff
+        else:
+            pred += vpdiff
+
+        if pred > 32767:
+            pred = 32767
+        elif pred < -32768:
+            pred = -32768
+
+        idx += IMA_INDEX_TABLE[nib]
+        if idx < 0:
+            idx = 0
+        elif idx > 88:
+            idx = 88
+
+        if low_nibble:
+            out[out_pos] = nib & 0x0F
+            low_nibble = False
+        else:
+            out[out_pos] |= (nib & 0x0F) << 4
+            out_pos += 1
+            low_nibble = True
+
+    return bytes(out)
+
+
+def convert_wav_to_wia_and_raw(wav_path: Path, out_wia: Path, out_raw_be: Path | None = None) -> None:
+    with wave.open(str(wav_path), "rb") as w:
+        channels = w.getnchannels()
+        sampwidth = w.getsampwidth()
+        rate = w.getframerate()
+        nframes = w.getnframes()
+        raw = w.readframes(nframes)
+
+    if sampwidth != 2 or channels not in (1, 2):
+        raise ValueError(f"Formato WAV no soportado en {wav_path}: ch={channels}, width={sampwidth}")
+
+    total_shorts = nframes * channels
+    shorts = struct.unpack(f"<{total_shorts}h", raw)
+    if channels == 2:
+        left = list(shorts[0::2])
+        right = list(shorts[1::2])
+    else:
+        left = list(shorts)
+        right = list(shorts)
+
+    if out_raw_be is not None:
+        # Splash screen RGBA big-endian + audio LPCM16 big-endian opcional
+        interleaved_be = bytearray(nframes * 4)
+        struct.pack_into(f">{total_shorts}h", interleaved_be, 0, *shorts)
+        out_raw_be.write_bytes(interleaved_be)
+
+    # Decimar 48000 -> 24000 Hz con filtro [1, 2, 1]/4 para eliminar aliasing y reducir tamaño a la mitad
+    if rate == 48000:
+        n2 = nframes // 2
+        l_ds = [0] * n2
+        r_ds = [0] * n2
+        for i in range(n2):
+            i2 = i * 2
+            l0 = left[i2]
+            l1 = left[i2 + 1]
+            l2 = left[i2 + 2] if (i2 + 2) < nframes else l1
+            r0 = right[i2]
+            r1 = right[i2 + 1]
+            r2 = right[i2 + 2] if (i2 + 2) < nframes else r1
+            l_ds[i] = (l0 + 2 * l1 + l2) >> 2
+            r_ds[i] = (r0 + 2 * r1 + r2) >> 2
+        left, right = l_ds, r_ds
+        out_rate = 24000
+    else:
+        out_rate = rate
+
+    # Asegurar número par de muestras por canal
+    if len(left) & 1:
+        left.append(left[-1])
+        right.append(right[-1])
+
+    num_samples = len(left)
+    adpcm_l = encode_ima_channel(left)
+    adpcm_r = encode_ima_channel(right)
+
+    # Cabecera WIA1 (16 bytes big-endian): magic 'WIA1', sampleRate(u32), numSamples(u32), channels(u16), reserved(u16)
+    hdr = struct.pack(">4sIIHH", b"WIA1", out_rate, num_samples, 2, 0)
+    out_wia.write_bytes(hdr + adpcm_l + adpcm_r)
+
+
+def generate_splash_screen_hpp(tv_img: Image.Image, out_hpp: Path) -> None:
+    w, h = tv_img.size
+    rgba = tv_img.convert("RGBA")
+    rle_pairs: list[tuple[int, int]] = []
+    prev_col = -1
+    run_len = 0
+
+    for r, g, b, _a in rgba.getdata():
+        col = (r << 24) | (g << 16) | (b << 8)
+        if col == prev_col and run_len < 0xFFFFFFFF:
+            run_len += 1
+        else:
+            if run_len > 0:
+                rle_pairs.append((run_len, prev_col))
+            prev_col = col
+            run_len = 1
+    if run_len > 0:
+        rle_pairs.append((run_len, prev_col))
+
+    lines = [
+        "#pragma once",
+        "#include <cstdint>",
+        "",
+        "// Splash screen 1280x720 comprimido en RLE (RGBX32 big-endian)",
+        "namespace wutui::splash {",
+        f"constexpr int kSplashW = {w};",
+        f"constexpr int kSplashH = {h};",
+        f"constexpr uint32_t kSplashRleCount = {len(rle_pairs)};",
+        f"static const uint32_t kSplashRleData[{len(rle_pairs) * 2}] = {{",
+    ]
+    flat = []
+    for cnt, col in rle_pairs:
+        flat.append(f"0x{cnt:08X}u")
+        flat.append(f"0x{col:08X}u")
+    for i in range(0, len(flat), 12):
+        lines.append("    " + ",".join(flat[i : i + 12]) + ",")
+    lines.append("};")
+    lines.append("} // namespace wutui::splash")
+    out_hpp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def main() -> None:
     root = Path(__file__).resolve().parent
     assets_dir = root / "assets"
+    content_dir = root / "content"
     assets_dir.mkdir(parents=True, exist_ok=True)
+    content_dir.mkdir(parents=True, exist_ok=True)
 
-    make_splash_image(128, 128, True).save(assets_dir / "icon.png")
-    make_splash_image(1280, 720, False).save(assets_dir / "tv.png")
-    make_splash_image(854, 480, False).save(assets_dir / "drc.png")
+    icon_img = make_splash_image(128, 128, True)
+    tv_img = make_splash_image(1280, 720, False)
+    drc_img = make_splash_image(854, 480, False)
+
+    icon_img.save(assets_dir / "icon.png")
+    tv_img.save(assets_dir / "tv.png")
+    drc_img.save(assets_dir / "drc.png")
 
     atlas_path = root / "source" / "font_atlas.hpp"
     generate_font_atlas_hpp(atlas_path)
-    print("Assets 720p y font_atlas.hpp generados en:", root)
+
+    splash_hpp_path = root / "source" / "splash_screen.hpp"
+    generate_splash_screen_hpp(tv_img, splash_hpp_path)
+
+    # Convertir sonidos desde Sonidos/ hacia content/ (para empaquetar en .wuhb)
+    sounds_dir = root.parent.parent / "Sonidos"
+    intro_wav = sounds_dir / "Pantalla Inicio.wav"
+    bgm_wav = sounds_dir / "Tema de Fondo.wav"
+    if intro_wav.exists():
+        convert_wav_to_wia_and_raw(intro_wav, content_dir / "intro.wia")
+        print("Audio intro generado:", content_dir / "intro.wia")
+    if bgm_wav.exists():
+        convert_wav_to_wia_and_raw(bgm_wav, content_dir / "bgm.wia")
+        print("Audio BGM generado:", content_dir / "bgm.wia")
+
+    print("Assets 720p, splash_screen.hpp, font_atlas.hpp y audios generados en:", root)
 
 
 if __name__ == "__main__":
