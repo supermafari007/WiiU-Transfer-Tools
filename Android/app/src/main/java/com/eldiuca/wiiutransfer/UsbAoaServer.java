@@ -40,11 +40,13 @@ public class UsbAoaServer {
     private static final int MAGIC_OK   = 0x4B4F5557; // "WUOK"
     private static final int MAGIC_ERR  = 0x52455557; // "WUER"
 
-    private static final int CMD_PING       = 1;
-    private static final int CMD_LIST_PKGS  = 2;
-    private static final int CMD_OPEN_FILE  = 3;
-    private static final int CMD_READ_CHUNK = 4;
-    private static final int CMD_CLOSE_FILE = 5;
+    private static final int CMD_PING         = 1;
+    private static final int CMD_LIST_PKGS    = 2;
+    private static final int CMD_OPEN_FILE    = 3;
+    private static final int CMD_READ_CHUNK   = 4;
+    private static final int CMD_CLOSE_FILE   = 5;
+    private static final int CMD_CHECK_UPDATE = 6;
+    private static final int CMD_READ_UPDATE  = 7;
 
     private static final int MAX_AOA_WRITE  = 15 * 1024; // <= 16 KB por escritura USB Bulk AOA
     private static final int MAX_CHUNK_DATA = 12 * 1024; // 12 KB de datos + 12 B header = 12300 B
@@ -60,7 +62,9 @@ public class UsbAoaServer {
 
     private volatile File rootDir;
     private final Set<String> markedNames = new HashSet<String>();
+    private final List<NfsaTransferServer.WupPackage> discoveredPackages = new ArrayList<NfsaTransferServer.WupPackage>();
     private final List<File> indexedFiles = new ArrayList<File>();
+    private volatile byte[] pendingWuhbUpdate = null;
     private final AtomicBoolean connected = new AtomicBoolean(false);
     private final AtomicBoolean stopping = new AtomicBoolean(false);
     private final AtomicLong totalBytesSent = new AtomicLong(0L);
@@ -114,6 +118,21 @@ public class UsbAoaServer {
         if (names != null) {
             markedNames.addAll(names);
         }
+    }
+
+    public synchronized void setDiscoveredPackages(List<NfsaTransferServer.WupPackage> pkgs) {
+        discoveredPackages.clear();
+        if (pkgs != null) {
+            discoveredPackages.addAll(pkgs);
+        }
+    }
+
+    public void setPendingWuhbUpdate(byte[] wuhbBytes) {
+        this.pendingWuhbUpdate = wuhbBytes;
+    }
+
+    public boolean hasPendingWuhbUpdate() {
+        return pendingWuhbUpdate != null && pendingWuhbUpdate.length >= 64 * 1024;
     }
 
     public boolean isConnected() {
@@ -407,6 +426,35 @@ public class UsbAoaServer {
                         }
                         currentFile = "";
                         sendFramedResponse(MAGIC_OK, (seq << 16), null);
+                    } else if (cmd == CMD_CHECK_UPDATE) {
+                        byte[] upd = pendingWuhbUpdate;
+                        byte[] szBuf = new byte[4];
+                        wr32LE(szBuf, 0, (upd != null) ? upd.length : 0);
+                        sendFramedResponse(MAGIC_OK, (seq << 16), szBuf);
+                    } else if (cmd == CMD_READ_UPDATE) {
+                        byte[] upd = pendingWuhbUpdate;
+                        if (upd == null || payloadLen < 8) {
+                            sendFramedResponse(MAGIC_ERR, (seq << 16) | 3, null);
+                        } else {
+                            int off = rd32LE(payload, 0);
+                            int want = rd32LE(payload, 4);
+                            if (want < 0) want = 0;
+                            if (want > MAX_CHUNK_DATA) want = MAX_CHUNK_DATA;
+                            if (off < 0 || off >= upd.length) {
+                                sendFramedResponse(MAGIC_OK, (seq << 16), null);
+                            } else {
+                                int got = Math.min(want, upd.length - off);
+                                byte[] slice = new byte[got];
+                                System.arraycopy(upd, off, slice, 0, got);
+                                sendFramedResponse(MAGIC_OK, (seq << 16), slice);
+                                if (off + got >= upd.length) {
+                                    pendingWuhbUpdate = null;
+                                    if (listener != null) {
+                                        listener.onTransferActivity("App Wii U enviada a la SD!", totalBytesSent.get());
+                                    }
+                                }
+                            }
+                        }
                     } else {
                         sendFramedResponse(MAGIC_ERR, (seq << 16) | 99, null);
                     }
@@ -485,27 +533,23 @@ public class UsbAoaServer {
     }
 
     private byte[] buildPackagesManifest() {
-        File root = rootDir;
-        if (root == null || !root.isDirectory()) return new byte[0];
-
         Set<String> markedCopy;
+        List<NfsaTransferServer.WupPackage> pkgSnap;
         synchronized (this) {
             markedCopy = new HashSet<String>(markedNames);
+            pkgSnap = new ArrayList<NfsaTransferServer.WupPackage>(discoveredPackages);
         }
 
-        File[] children = root.listFiles();
-        if (children == null) return new byte[0];
-        Arrays.sort(children, new Comparator<File>() {
-            @Override
-            public int compare(File a, File b) {
-                return a.getName().compareToIgnoreCase(b.getName());
-            }
-        });
+        // Si MainActivity aun no paso lista descubierta, escanear recursivamente rootDir
+        if (pkgSnap.isEmpty() && rootDir != null && rootDir.isDirectory()) {
+            pkgSnap = NfsaTransferServer.scanPackages(rootDir, markedCopy);
+        }
 
         StringBuilder sb = new StringBuilder();
         List<File> newIndex = new ArrayList<File>();
-        for (File dir : children) {
-            if (!dir.isDirectory() || dir.getName().startsWith(".")) continue;
+        for (NfsaTransferServer.WupPackage pkg : pkgSnap) {
+            if (pkg == null || pkg.directory == null || !pkg.directory.isDirectory()) continue;
+            File dir = pkg.directory;
             List<File> files = new ArrayList<File>();
             boolean[] looksWup = new boolean[]{false};
             collectFiles(dir, 0, files, looksWup);
@@ -513,9 +557,9 @@ public class UsbAoaServer {
 
             long total = 0L;
             for (File f : files) total += f.length();
-            boolean isMarked = markedCopy.contains(dir.getName());
+            boolean isMarked = markedCopy.contains(pkg.name) || pkg.marked;
 
-            sb.append("P|").append(dir.getName()).append("|")
+            sb.append("P|").append(pkg.name).append("|")
               .append(isMarked ? "1" : "0").append("|")
               .append(total).append("\n");
 

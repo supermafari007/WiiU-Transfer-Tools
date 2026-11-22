@@ -82,6 +82,7 @@ public class NfsaTransferServer {
     private final Object lock = new Object();
     private File rootDir;
     private final Set<String> allowedPackages = new HashSet<String>();
+    private final java.util.Map<String, File> packageDirMap = new java.util.LinkedHashMap<String, File>();
     private boolean filterByMarked = false;
     private final EventListener listener;
 
@@ -121,6 +122,19 @@ public class NfsaTransferServer {
                 allowedPackages.addAll(markedNames);
             }
             filterByMarked = onlyServeMarked && !allowedPackages.isEmpty();
+        }
+    }
+
+    public void setDiscoveredPackages(List<WupPackage> pkgs) {
+        synchronized (lock) {
+            packageDirMap.clear();
+            if (pkgs != null) {
+                for (WupPackage p : pkgs) {
+                    if (p != null && p.directory != null && p.directory.isDirectory()) {
+                        packageDirMap.put(p.name, p.directory);
+                    }
+                }
+            }
         }
     }
 
@@ -199,13 +213,75 @@ public class NfsaTransferServer {
         return "127.0.0.1";
     }
 
+    private static boolean isSystemSkipDir(String name) {
+        if (name == null || name.isEmpty() || name.startsWith(".")) return true;
+        String low = name.toLowerCase(Locale.US);
+        return low.equals("android") || low.equals("dcim") || low.equals("pictures")
+                || low.equals("music") || low.equals("movies") || low.equals("notifications")
+                || low.equals("ringtones") || low.equals("alarms") || low.equals("podcasts")
+                || low.equals("audiobooks") || low.equals("lost.dir")
+                || low.equals("system volume information") || low.equals("$recycle.bin");
+    }
+
+    private static boolean hasDirectWupFiles(File dir) {
+        File[] files = dir.listFiles();
+        if (files == null) return false;
+        for (File f : files) {
+            if (f.isFile()) {
+                String low = f.getName().toLowerCase(Locale.US);
+                if (low.equals("title.tmd") || low.endsWith(".tmd") || low.endsWith(".tik") || low.endsWith(".app")) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     public static List<WupPackage> scanPackages(File rootDir, Set<String> preserveMarked) {
         List<WupPackage> list = new ArrayList<WupPackage>();
         if (rootDir == null || !rootDir.exists() || !rootDir.isDirectory()) {
             return list;
         }
-        File[] children = rootDir.listFiles();
-        if (children == null) return list;
+        Set<String> seenCanon = new HashSet<String>();
+        Set<String> usedNames = new HashSet<String>();
+
+        // Si la propia carpeta elegida contiene directamente archivos WUP (.tmd/.tik/.app), incluirla
+        if (hasDirectWupFiles(rootDir)) {
+            int[] c = new int[]{0};
+            long[] sz = new long[]{0L};
+            boolean[] tmd = new boolean[]{false};
+            scanFolderRecursive(rootDir, 0, c, sz, tmd);
+            if (c[0] > 0) {
+                String name = rootDir.getName();
+                boolean mk = (preserveMarked == null) || preserveMarked.contains(name);
+                list.add(new WupPackage(name, rootDir, c[0], sz[0], tmd[0], mk));
+                return list;
+            }
+        }
+
+        findWupDirsRecursive(rootDir, 0, 4, preserveMarked, seenCanon, usedNames, list);
+        return list;
+    }
+
+    public static List<WupPackage> scanPackagesMultiRoot(List<File> roots, Set<String> preserveMarked) {
+        List<WupPackage> list = new ArrayList<WupPackage>();
+        Set<String> seenCanon = new HashSet<String>();
+        Set<String> usedNames = new HashSet<String>();
+        if (roots == null) return list;
+        for (File r : roots) {
+            if (r == null || !r.exists() || !r.isDirectory()) continue;
+            findWupDirsRecursive(r, 0, 4, preserveMarked, seenCanon, usedNames, list);
+        }
+        return list;
+    }
+
+    private static void findWupDirsRecursive(
+            File dir, int depth, int maxDepth,
+            Set<String> preserveMarked, Set<String> seenCanon,
+            Set<String> usedNames, List<WupPackage> outList) {
+        if (depth > maxDepth || outList.size() >= 150) return;
+        File[] children = dir.listFiles();
+        if (children == null) return;
 
         Arrays.sort(children, new Comparator<File>() {
             @Override
@@ -216,20 +292,32 @@ public class NfsaTransferServer {
 
         for (File entry : children) {
             if (!entry.isDirectory()) continue;
-            String name = entry.getName();
-            if (name.startsWith(".")) continue;
+            String rawName = entry.getName();
+            if (isSystemSkipDir(rawName)) continue;
 
-            int[] countHolder = new int[]{0};
-            long[] sizeHolder = new long[]{0L};
-            boolean[] tmdHolder = new boolean[]{false};
-            scanFolderRecursive(entry, 0, countHolder, sizeHolder, tmdHolder);
+            if (hasDirectWupFiles(entry)) {
+                String canon;
+                try { canon = entry.getCanonicalPath(); } catch (IOException e) { canon = entry.getAbsolutePath(); }
+                if (!seenCanon.add(canon)) continue;
 
-            if (countHolder[0] > 0) {
-                boolean mk = (preserveMarked == null) || preserveMarked.contains(name);
-                list.add(new WupPackage(name, entry, countHolder[0], sizeHolder[0], tmdHolder[0], mk));
+                int[] countHolder = new int[]{0};
+                long[] sizeHolder = new long[]{0L};
+                boolean[] tmdHolder = new boolean[]{false};
+                scanFolderRecursive(entry, 0, countHolder, sizeHolder, tmdHolder);
+                if (countHolder[0] > 0) {
+                    String uniqueName = rawName;
+                    int suffix = 2;
+                    while (usedNames.contains(uniqueName.toLowerCase(Locale.US))) {
+                        uniqueName = rawName + "_" + suffix++;
+                    }
+                    usedNames.add(uniqueName.toLowerCase(Locale.US));
+                    boolean mk = (preserveMarked == null) || preserveMarked.contains(uniqueName);
+                    outList.add(new WupPackage(uniqueName, entry, countHolder[0], sizeHolder[0], tmdHolder[0], mk));
+                }
+            } else {
+                findWupDirsRecursive(entry, depth + 1, maxDepth, preserveMarked, seenCanon, usedNames, outList);
             }
         }
-        return list;
     }
 
     private static void scanFolderRecursive(File dir, int depth, int[] count, long[] totalSize, boolean[] hasTmd) {
@@ -408,10 +496,35 @@ public class NfsaTransferServer {
         return 12 + len;
     }
 
-    private static File safeResolve(File root, String relPath) {
+    private File safeResolve(File root, String relPath) {
         try {
-            String clean = relPath.replace('\\', '/');
+            if (relPath == null) return null;
+            String clean = relPath.replace('\\', '/').trim();
             while (clean.startsWith("/")) clean = clean.substring(1);
+            if (clean.contains("..")) return null;
+
+            // Buscar primero en el mapa de paquetes descubiertos (cualquier ubicacion del celular)
+            if (!clean.isEmpty()) {
+                int slash = clean.indexOf('/');
+                String top = (slash >= 0) ? clean.substring(0, slash) : clean;
+                String rest = (slash >= 0) ? clean.substring(slash + 1) : "";
+                File mappedPkgDir;
+                synchronized (lock) {
+                    mappedPkgDir = packageDirMap.get(top);
+                }
+                if (mappedPkgDir != null && mappedPkgDir.isDirectory()) {
+                    File base = mappedPkgDir.getCanonicalFile();
+                    File target = rest.isEmpty() ? base : new File(base, rest).getCanonicalFile();
+                    String basePath = base.getPath();
+                    String targetPath = target.getPath();
+                    if (targetPath.equals(basePath) || targetPath.startsWith(basePath + File.separator)) {
+                        return target;
+                    }
+                    return null;
+                }
+            }
+
+            if (root == null) return null;
             File base = root.getCanonicalFile();
             File target = new File(base, clean).getCanonicalFile();
             String basePath = base.getPath();
@@ -468,15 +581,33 @@ public class NfsaTransferServer {
                     if (sub.isEmpty()) {
                         Set<String> allowedSnap;
                         boolean filterSnap;
+                        java.util.Map<String, File> mapSnap;
                         synchronized (lock) {
                             allowedSnap = new HashSet<String>(allowedPackages);
                             filterSnap = filterByMarked;
+                            mapSnap = new java.util.LinkedHashMap<String, File>(packageDirMap);
                         }
-                        List<WupPackage> pkgs = scanPackages(root, null);
-                        for (WupPackage p : pkgs) {
-                            if (filterSnap && !allowedSnap.contains(p.name)) continue;
-                            if (sb.length() > 0) sb.append('\n');
-                            sb.append("D|").append(p.name).append('|').append(p.totalBytes).append('|').append(p.fileCount);
+                        if (!mapSnap.isEmpty()) {
+                            for (java.util.Map.Entry<String, File> en : mapSnap.entrySet()) {
+                                String pkgName = en.getKey();
+                                File dir = en.getValue();
+                                if (filterSnap && !allowedSnap.contains(pkgName)) continue;
+                                if (dir == null || !dir.isDirectory()) continue;
+                                int[] c = new int[]{0};
+                                long[] sz = new long[]{0L};
+                                boolean[] tmd = new boolean[]{false};
+                                scanFolderRecursive(dir, 0, c, sz, tmd);
+                                if (c[0] <= 0) continue;
+                                if (sb.length() > 0) sb.append('\n');
+                                sb.append("D|").append(pkgName).append('|').append(sz[0]).append('|').append(c[0]);
+                            }
+                        } else {
+                            List<WupPackage> pkgs = scanPackages(root, null);
+                            for (WupPackage p : pkgs) {
+                                if (filterSnap && !allowedSnap.contains(p.name)) continue;
+                                if (sb.length() > 0) sb.append('\n');
+                                sb.append("D|").append(p.name).append('|').append(p.totalBytes).append('|').append(p.fileCount);
+                            }
                         }
                     } else {
                         File target = safeResolve(root, sub);

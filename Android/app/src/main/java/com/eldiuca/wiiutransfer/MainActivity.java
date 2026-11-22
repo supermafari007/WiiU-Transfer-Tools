@@ -71,7 +71,7 @@ import java.util.zip.ZipInputStream;
  */
 public class MainActivity extends Activity {
 
-    public static final String APP_VERSION = "2.0.2";
+    public static final String APP_VERSION = "2.0.3";
     public static final String GITHUB_REPO_URL = "https://github.com/supermafari007/WiiU-Transfer-Tools";
     public static final String VERSION_JSON_URL = "https://raw.githubusercontent.com/supermafari007/WiiU-Transfer-Tools/main/version.json";
     public static final String DEFAULT_APK_URL = "https://raw.githubusercontent.com/supermafari007/WiiU-Transfer-Tools/main/Android/WiiU_Transfer_Tools_Android.apk";
@@ -102,6 +102,7 @@ public class MainActivity extends Activity {
 
     private final Handler uiHandler = new Handler(Looper.getMainLooper());
     private File activeFolder;
+    private boolean scanWholePhone = true;
     private final List<NfsaTransferServer.WupPackage> packages = new ArrayList<NfsaTransferServer.WupPackage>();
     private final Set<String> markedNames = new HashSet<String>();
     private NfsaTransferServer server;
@@ -759,8 +760,40 @@ public class MainActivity extends Activity {
         }
     }
 
+    private List<File> getAllStorageRoots() {
+        List<File> roots = new ArrayList<File>();
+        File primary = Environment.getExternalStorageDirectory();
+        if (primary != null && primary.isDirectory()) {
+            roots.add(primary);
+        }
+        // Detectar tambien tarjetas microSD externas en /storage/XXXX-XXXX
+        File storageDir = new File("/storage");
+        File[] volumes = storageDir.listFiles();
+        if (volumes != null) {
+            for (File v : volumes) {
+                if (v.isDirectory() && v.canRead()
+                        && !v.getName().equalsIgnoreCase("emulated")
+                        && !v.getName().equalsIgnoreCase("self")) {
+                    roots.add(v);
+                }
+            }
+        }
+        return roots;
+    }
+
     private void refreshPackages() {
-        List<NfsaTransferServer.WupPackage> scanned = NfsaTransferServer.scanPackages(activeFolder, markedNames);
+        List<NfsaTransferServer.WupPackage> scanned;
+        if (scanWholePhone) {
+            scanned = NfsaTransferServer.scanPackagesMultiRoot(getAllStorageRoots(), markedNames);
+            if (folderPathText != null) {
+                folderPathText.setText("Todo el celular (cualquier carpeta)");
+            }
+        } else {
+            scanned = NfsaTransferServer.scanPackages(activeFolder, markedNames);
+            if (folderPathText != null && activeFolder != null) {
+                folderPathText.setText(activeFolder.getAbsolutePath());
+            }
+        }
         packages.clear();
         packages.addAll(scanned);
 
@@ -777,7 +810,13 @@ public class MainActivity extends Activity {
             }
         }
 
+        server.setDiscoveredPackages(packages);
         server.setMarkedQueue(markedNames, true);
+        if (aoaServer != null) {
+            aoaServer.setRootDir(activeFolder);
+            aoaServer.setDiscoveredPackages(packages);
+            aoaServer.setMarkedNames(markedNames);
+        }
         rebuildPackageListViews();
         updateBottomSummaryUi();
         syncQueueToUsbAutomatically();
@@ -1547,6 +1586,10 @@ public class MainActivity extends Activity {
                                     statusView.setTextColor(COL_GREEN_HI);
                                 }
                                 launchApkInstaller(outFileName);
+                            } else if (outFileName.endsWith(".wuhb")) {
+                                MediaScannerConnection.scanFile(MainActivity.this,
+                                        new String[]{outFile.getAbsolutePath()}, null, null);
+                                pushWuhbToWiiUSd(outFile, statusView);
                             } else {
                                 MediaScannerConnection.scanFile(MainActivity.this,
                                         new String[]{outFile.getAbsolutePath()}, null, null);
@@ -1593,40 +1636,231 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void pushWuhbToWiiUSd(final File wuhbFile, final TextView statusView) {
+        if (statusView != null) {
+            statusView.setText("Enviando actualizaci\u00f3n a la SD de tu Wii U...");
+            statusView.setTextColor(COL_CYAN_DK);
+        }
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                byte[] blob;
+                try {
+                    FileInputStream fis = new FileInputStream(wuhbFile);
+                    java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream((int) wuhbFile.length());
+                    byte[] tmp = new byte[64 * 1024];
+                    int r;
+                    while ((r = fis.read(tmp)) > 0) bos.write(tmp, 0, r);
+                    fis.close();
+                    blob = bos.toByteArray();
+                } catch (Exception e) {
+                    return;
+                }
+
+                // 1. Si estamos conectados por cable USB directo (AOA), enviar por USB a la SD de Wii U
+                if (aoaServer != null && aoaServer.isConnected()) {
+                    aoaServer.setPendingWuhbUpdate(blob);
+                    uiHandler.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (statusView != null) {
+                                statusView.setText("Enviando por USB a la SD de tu Wii U (espera 2 seg)...");
+                                statusView.setTextColor(COL_GREEN_HI);
+                            }
+                            Toast.makeText(MainActivity.this,
+                                    "Actualizaci\u00f3n enviada por USB a la SD de tu Wii U.", Toast.LENGTH_LONG).show();
+                        }
+                    });
+                    return;
+                }
+
+                // 2. Si no hay USB, buscar la consola Wii U en Wi-Fi (UDP 7333) y enviar por TCP 7333
+                String wiiuIp = discoverWiiUConsoleIpOnLan();
+                if (wiiuIp != null && !wiiuIp.isEmpty()) {
+                    boolean pushed = sendWuhbOverTcp7333(wiiuIp, blob);
+                    if (pushed) {
+                        final String ipOk = wiiuIp;
+                        uiHandler.post(new Runnable() {
+                            @Override
+                            public void run() {
+                                if (statusView != null) {
+                                    statusView.setText("App Wii U sobrescrita en la SD (" + ipOk + ")!");
+                                    statusView.setTextColor(COL_GREEN_HI);
+                                }
+                                Toast.makeText(MainActivity.this,
+                                        "WiiU_Transfer.wuhb actualizado en la SD de tu Wii U!", Toast.LENGTH_LONG).show();
+                            }
+                        });
+                        return;
+                    }
+                }
+
+                // 3. Fallback: guardado en /Download/WiiU_Transfer.wuhb
+                uiHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (statusView != null) {
+                            statusView.setText("Guardado en /Download/WiiU_Transfer.wuhb (abre la app en Wii U para enviarlo directo)");
+                            statusView.setTextColor(COL_GREEN_HI);
+                        }
+                        Toast.makeText(MainActivity.this,
+                                "Guardado en /Download/WiiU_Transfer.wuhb. Conecta tu Wii U para sobrescribir la SD autom\u00e1ticamente.",
+                                Toast.LENGTH_LONG).show();
+                    }
+                });
+            }
+        }, "WiiU-SD-Push").start();
+    }
+
+    private String discoverWiiUConsoleIpOnLan() {
+        java.net.DatagramSocket ds = null;
+        try {
+            ds = new java.net.DatagramSocket();
+            ds.setBroadcast(true);
+            ds.setSoTimeout(1500);
+            byte[] req = "WIIU_FIND_CONSOLE".getBytes("UTF-8");
+            java.net.DatagramPacket p = new java.net.DatagramPacket(
+                    req, req.length, java.net.InetAddress.getByName("255.255.255.255"), 7333);
+            ds.send(p);
+            byte[] buf = new byte[128];
+            java.net.DatagramPacket resp = new java.net.DatagramPacket(buf, buf.length);
+            ds.receive(resp);
+            String txt = new String(resp.getData(), 0, resp.getLength(), "UTF-8");
+            if (txt.startsWith("WIIU_CONSOLE_HERE")) {
+                return resp.getAddress().getHostAddress();
+            }
+        } catch (Exception ignored) {
+        } finally {
+            if (ds != null) ds.close();
+        }
+        if (server != null) {
+            String last = server.getFirstClientIp();
+            if (last != null && !last.isEmpty()) return last;
+        }
+        return null;
+    }
+
+    private boolean sendWuhbOverTcp7333(String ip, byte[] blob) {
+        java.net.Socket s = null;
+        try {
+            s = new java.net.Socket();
+            s.connect(new java.net.InetSocketAddress(ip, 7333), 3000);
+            s.setSoTimeout(15000);
+            java.io.OutputStream out = s.getOutputStream();
+            byte[] hdr = new byte[8];
+            hdr[0] = 'W'; hdr[1] = 'U'; hdr[2] = 'P'; hdr[3] = 'U';
+            int sz = blob.length;
+            hdr[4] = (byte) (sz & 0xFF);
+            hdr[5] = (byte) ((sz >> 8) & 0xFF);
+            hdr[6] = (byte) ((sz >> 16) & 0xFF);
+            hdr[7] = (byte) ((sz >> 24) & 0xFF);
+            out.write(hdr);
+            out.write(blob);
+            out.flush();
+            byte[] ack = new byte[16];
+            int n = s.getInputStream().read(ack);
+            return n >= 2 && ack[0] == 'O' && ack[1] == 'K';
+        } catch (Exception e) {
+            return false;
+        } finally {
+            try { if (s != null) s.close(); } catch (Exception ignored) {}
+        }
+    }
+
     // =========================================================================
     // Selección de carpeta e importación de juegos (.ZIP)
     // =========================================================================
     private void showChangeFolderDialog() {
         final File extRoot = Environment.getExternalStorageDirectory();
         final File[] presets = new File[]{
-                new File(extRoot, "WiiU_Transfer"),
                 new File(extRoot, "Download"),
-                new File(extRoot, "Download/WiiU_Transfer"),
+                new File(extRoot, "WiiU_Transfer"),
                 new File(extRoot, "WUP"),
                 new File(extRoot, "install")
         };
         String[] labels = new String[]{
-                "/ almacenamiento / WiiU_Transfer (Recomendada)",
-                "/ almacenamiento / Download (Descargas del celular)",
-                "/ almacenamiento / Download / WiiU_Transfer",
+                "Todo el celular (Buscar en cualquier carpeta - Recomendado)",
+                "Explorar carpetas del celular...",
+                "/ almacenamiento / Download (Descargas)",
+                "/ almacenamiento / WiiU_Transfer",
                 "/ almacenamiento / WUP",
                 "/ almacenamiento / install",
-                "Escribir otra carpeta manualmente..."
+                "Escribir otra ruta manualmente..."
         };
 
         new AlertDialog.Builder(this)
-                .setTitle("Elegir carpeta de juegos")
+                .setTitle("Elegir ubicaci\u00f3n de juegos")
                 .setItems(labels, new DialogInterface.OnClickListener() {
                     @Override
                     public void onClick(DialogInterface dialog, int which) {
-                        if (which < presets.length) {
-                            activeFolder = presets[which];
+                        if (which == 0) {
+                            scanWholePhone = true;
+                            markedNames.clear();
+                            refreshPackages();
+                        } else if (which == 1) {
+                            showFolderBrowserDialog(extRoot);
+                        } else if (which - 2 < presets.length) {
+                            scanWholePhone = false;
+                            activeFolder = presets[which - 2];
                             if (!activeFolder.exists()) activeFolder.mkdirs();
                             server.setRootDir(activeFolder);
                             markedNames.clear();
                             refreshPackages();
                         } else {
                             showCustomPathDialog();
+                        }
+                    }
+                })
+                .setNegativeButton("Cancelar", null)
+                .show();
+    }
+
+    private void showFolderBrowserDialog(final File currentDir) {
+        if (currentDir == null || !currentDir.isDirectory()) return;
+        File[] children = currentDir.listFiles();
+        final List<File> subDirs = new ArrayList<File>();
+        if (children != null) {
+            java.util.Arrays.sort(children, new java.util.Comparator<File>() {
+                @Override
+                public int compare(File a, File b) {
+                    return a.getName().compareToIgnoreCase(b.getName());
+                }
+            });
+            for (File c : children) {
+                if (c.isDirectory() && !c.getName().startsWith(".")) {
+                    subDirs.add(c);
+                }
+            }
+        }
+
+        List<String> items = new ArrayList<String>();
+        items.add("\u2713 Usar esta carpeta (" + currentDir.getName() + ")");
+        final boolean hasParent = (currentDir.getParentFile() != null && currentDir.getParentFile().canRead());
+        if (hasParent) {
+            items.add("\u2B06 Subir un nivel (..)");
+        }
+        for (File d : subDirs) {
+            items.add("\uD83D\uDCC1 " + d.getName());
+        }
+
+        new AlertDialog.Builder(this)
+                .setTitle(currentDir.getAbsolutePath())
+                .setItems(items.toArray(new String[0]), new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        if (which == 0) {
+                            scanWholePhone = false;
+                            activeFolder = currentDir;
+                            server.setRootDir(activeFolder);
+                            markedNames.clear();
+                            refreshPackages();
+                        } else if (hasParent && which == 1) {
+                            showFolderBrowserDialog(currentDir.getParentFile());
+                        } else {
+                            int idx = which - (hasParent ? 2 : 1);
+                            if (idx >= 0 && idx < subDirs.size()) {
+                                showFolderBrowserDialog(subDirs.get(idx));
+                            }
                         }
                     }
                 })
@@ -1649,6 +1883,7 @@ public class MainActivity extends Activity {
                         if (!path.isEmpty()) {
                             File f = new File(path);
                             if (!f.exists()) f.mkdirs();
+                            scanWholePhone = false;
                             activeFolder = f;
                             server.setRootDir(activeFolder);
                             markedNames.clear();

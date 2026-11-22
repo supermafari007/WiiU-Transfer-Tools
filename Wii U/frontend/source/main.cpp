@@ -1437,7 +1437,7 @@ void DrawUI(wutui::UiCanvas& ui, const AppState& st) {
     ui.FillRect(0, 94, wutui::LOGICAL_W, 2, wutui::COL_CYAN);
     ui.DrawGamepadIcon(28, 10);
     ui.DrawText(146, 16, "Wii U Transfer Tools", wutui::COL_WHITE, wutui::FontId::Header);
-    ui.DrawText(146, 58, "por El Diuca  *  Ver. 2.0.2", wutui::COL_CYAN_SUB, wutui::FontId::Body, 376);
+    ui.DrawText(146, 58, "por El Diuca  *  Ver. 2.0.3", wutui::COL_CYAN_SUB, wutui::FontId::Body, 376);
 
     // Selector simplificado de 2 pestañas [X]: Modo USB | Modo Red (x=536..872)
     ui.FillRoundedRect(536, 24, 336, 48, 24, wutui::COL_PILL_OFF);
@@ -2550,6 +2550,239 @@ void HandleTouch(int x,
     }
 }
 
+// =========================================================================
+// Receptor de auto-actualizacion de WiiU_Transfer.wuhb en la Tarjeta SD
+// (Puerto TCP/UDP 7333 para PC y Android por Red + Canal USB directo AOA)
+// =========================================================================
+constexpr uint16_t kSdUpdatePort = 7333;
+constexpr const char* kSdWuhbPath = "fs:/vol/external01/wiiu/apps/WiiU_Transfer.wuhb";
+constexpr const char* kSdWuhbTmp  = "fs:/vol/external01/wiiu/apps/WiiU_Transfer.wuhb.new";
+
+bool FinalizeSdWuhbTemp(AppState& st) {
+    FILE* chk = std::fopen(kSdWuhbTmp, "rb");
+    if (!chk) return false;
+    uint8_t hdr[4]{};
+    size_t n = std::fread(hdr, 1, 4, chk);
+    std::fclose(chk);
+    if (n != 4 || hdr[0] != 'W' || hdr[1] != 'U' || hdr[2] != 'H' || hdr[3] != 'B') {
+        std::remove(kSdWuhbTmp);
+        return false;
+    }
+    std::remove(kSdWuhbPath);
+    if (std::rename(kSdWuhbTmp, kSdWuhbPath) != 0) {
+        std::remove(kSdWuhbTmp);
+        return false;
+    }
+    UpdateAllFreeSpace(st);
+    return true;
+}
+
+bool TryApplyAoaSdUpdate(wutui::UiCanvas& ui, AppState& st) {
+    if (!st.mtpConnected || !st.mtpDev.IsConnected()) return false;
+    uint32_t updSize = 0;
+    if (!st.mtpDev.CheckPendingWuhbUpdate(updSize) || updSize < 64 * 1024) {
+        return false;
+    }
+
+    EnsureDirRecursive("fs:/vol/external01/wiiu/apps");
+    FILE* fp = std::fopen(kSdWuhbTmp, "wb");
+    if (!fp) return false;
+
+    st.statusIsError = false;
+    st.statusIsSuccess = false;
+    st.statusLine = "Actualizando App Wii U en la SD (USB)...";
+    st.subStatusLine = "Recibiendo nueva version desde tu celular...";
+    st.progress = 0.0f;
+    PresentDoubleBuffered(ui, st);
+
+    uint8_t buf[12 * 1024];
+    uint32_t offset = 0;
+    bool ok = true;
+    OSTime lastDraw = OSGetSystemTime();
+
+    while (offset < updSize) {
+        uint32_t want = std::min<uint32_t>(sizeof(buf), updSize - offset);
+        uint32_t got = 0;
+        if (!st.mtpDev.ReadWuhbUpdateChunk(offset, want, buf, got) || got == 0) {
+            ok = false;
+            break;
+        }
+        if (std::fwrite(buf, 1, got, fp) != got) {
+            ok = false;
+            break;
+        }
+        offset += got;
+        st.progress = static_cast<float>(offset) / static_cast<float>(updSize);
+        if (OSTicksToMilliseconds(OSGetSystemTime() - lastDraw) >= 120) {
+            PresentDoubleBuffered(ui, st);
+            lastDraw = OSGetSystemTime();
+        }
+    }
+    std::fclose(fp);
+
+    if (ok && offset == updSize && FinalizeSdWuhbTemp(st)) {
+        st.progress = 1.0f;
+        st.statusIsSuccess = true;
+        st.statusIsError = false;
+        st.statusLine = "App Wii U actualizada en la SD!";
+        st.subStatusLine = "Sal con [+] y vuelve a abrir para usar la nueva version.";
+        return true;
+    }
+
+    std::remove(kSdWuhbTmp);
+    st.statusIsError = true;
+    st.statusIsSuccess = false;
+    st.statusLine = "Error actualizando App en la SD.";
+    st.subStatusLine = "Revisa el espacio libre de tu tarjeta SD.";
+    return true;
+}
+
+class SdUpdateNetListener {
+public:
+    void Init() {
+        udpSock_ = socket(AF_INET, SOCK_DGRAM, 0);
+        if (udpSock_ >= 0) {
+            int yes = 1;
+            setsockopt(udpSock_, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+            sockaddr_in addr{};
+            addr.sin_family = AF_INET;
+            addr.sin_port = htons(kSdUpdatePort);
+            addr.sin_addr.s_addr = INADDR_ANY;
+            if (bind(udpSock_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
+                close(udpSock_);
+                udpSock_ = -1;
+            }
+        }
+
+        tcpSock_ = socket(AF_INET, SOCK_STREAM, 0);
+        if (tcpSock_ >= 0) {
+            int yes = 1;
+            setsockopt(tcpSock_, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+            sockaddr_in addr{};
+            addr.sin_family = AF_INET;
+            addr.sin_port = htons(kSdUpdatePort);
+            addr.sin_addr.s_addr = INADDR_ANY;
+            if (bind(tcpSock_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0 ||
+                listen(tcpSock_, 2) < 0) {
+                close(tcpSock_);
+                tcpSock_ = -1;
+            }
+        }
+    }
+
+    void Shutdown() {
+        if (udpSock_ >= 0) { close(udpSock_); udpSock_ = -1; }
+        if (tcpSock_ >= 0) { close(tcpSock_); tcpSock_ = -1; }
+    }
+
+    void Poll(wutui::UiCanvas& ui, AppState& st, bool& dirty) {
+        // 1. Responder descubrimiento UDP de PC/Android buscando la consola
+        if (udpSock_ >= 0) {
+            struct pollfd pfd{udpSock_, POLLIN, 0};
+            if (poll(&pfd, 1, 0) > 0) {
+                char buf[64]{};
+                sockaddr_in from{};
+                socklen_t fromLen = sizeof(from);
+                ssize_t n = recvfrom(udpSock_, buf, sizeof(buf) - 1, 0,
+                                     reinterpret_cast<sockaddr*>(&from), &fromLen);
+                if (n > 0 && std::strncmp(buf, "WIIU_FIND_CONSOLE", 17) == 0) {
+                    const char* reply = "WIIU_CONSOLE_HERE|2.0.3";
+                    sendto(udpSock_, reply, std::strlen(reply), 0,
+                           reinterpret_cast<sockaddr*>(&from), fromLen);
+                }
+            }
+        }
+
+        // 2. Aceptar push TCP de actualizacion .wuhb desde PC o Android
+        if (tcpSock_ >= 0) {
+            struct pollfd pfd{tcpSock_, POLLIN, 0};
+            if (poll(&pfd, 1, 0) > 0) {
+                sockaddr_in cliAddr{};
+                socklen_t cliLen = sizeof(cliAddr);
+                int cli = accept(tcpSock_, reinterpret_cast<sockaddr*>(&cliAddr), &cliLen);
+                if (cli >= 0) {
+                    HandlePushClient(cli, ui, st);
+                    close(cli);
+                    dirty = true;
+                }
+            }
+        }
+    }
+
+private:
+    void HandlePushClient(int cli, wutui::UiCanvas& ui, AppState& st) {
+        uint8_t hdr[8]{};
+        if (!RecvExact(cli, hdr, 8, 5000)) return;
+        if (std::memcmp(hdr, "WUPU", 4) != 0) return;
+        uint32_t sz = usbfat::Rd32LE(hdr + 4);
+        if (sz < 64 * 1024 || sz > 32 * 1024 * 1024) {
+            const char* err = "ERR_SIZE\n";
+            send(cli, err, std::strlen(err), 0);
+            return;
+        }
+
+        EnsureDirRecursive("fs:/vol/external01/wiiu/apps");
+        FILE* fp = std::fopen(kSdWuhbTmp, "wb");
+        if (!fp) {
+            const char* err = "ERR_SD\n";
+            send(cli, err, std::strlen(err), 0);
+            return;
+        }
+
+        st.statusIsError = false;
+        st.statusIsSuccess = false;
+        st.statusLine = "Actualizando App Wii U en la SD (Red)...";
+        st.subStatusLine = "Recibiendo WiiU_Transfer.wuhb...";
+        st.progress = 0.0f;
+        PresentDoubleBuffered(ui, st);
+
+        uint8_t buf[32 * 1024];
+        uint32_t gotTotal = 0;
+        bool ok = true;
+        OSTime lastDraw = OSGetSystemTime();
+
+        while (gotTotal < sz) {
+            uint32_t want = std::min<uint32_t>(sizeof(buf), sz - gotTotal);
+            if (!RecvExact(cli, buf, want, 10000)) {
+                ok = false;
+                break;
+            }
+            if (std::fwrite(buf, 1, want, fp) != want) {
+                ok = false;
+                break;
+            }
+            gotTotal += want;
+            st.progress = static_cast<float>(gotTotal) / static_cast<float>(sz);
+            if (OSTicksToMilliseconds(OSGetSystemTime() - lastDraw) >= 120) {
+                PresentDoubleBuffered(ui, st);
+                lastDraw = OSGetSystemTime();
+            }
+        }
+        std::fclose(fp);
+
+        if (ok && gotTotal == sz && FinalizeSdWuhbTemp(st)) {
+            const char* okMsg = "OK\n";
+            send(cli, okMsg, std::strlen(okMsg), 0);
+            st.progress = 1.0f;
+            st.statusIsSuccess = true;
+            st.statusIsError = false;
+            st.statusLine = "App Wii U actualizada en la SD!";
+            st.subStatusLine = "Sal con [+] y vuelve a abrir para usar la nueva version.";
+        } else {
+            std::remove(kSdWuhbTmp);
+            const char* err = "ERR_WRITE\n";
+            send(cli, err, std::strlen(err), 0);
+            st.statusIsError = true;
+            st.statusIsSuccess = false;
+            st.statusLine = "Error actualizando App en la SD.";
+            st.subStatusLine = "Verifica la tarjeta SD e intenta nuevamente.";
+        }
+    }
+
+    int udpSock_ = -1;
+    int tcpSock_ = -1;
+};
+
 } // namespace
 
 int main() {
@@ -2614,6 +2847,10 @@ int main() {
     PresentDoubleBuffered(ui, st);
     input.Flush();
 
+    SdUpdateNetListener sdUpdater;
+    sdUpdater.Init();
+    OSTime lastAoaUpdCheck = OSGetSystemTime();
+
     int redrawFrames = 2;
 
     while (WHBProcIsRunning()) {
@@ -2626,6 +2863,16 @@ int main() {
             : (st.mtpConnected && !st.usbFatConnected ? PkgSource::AndroidMtp : PkgSource::UsbFat);
         bool triggerInstall = false;
         bool dirty = false;
+
+        // Atender solicitudes de auto-actualizacion de la App en la SD (Red TCP/UDP 7333 y USB AOA)
+        sdUpdater.Poll(ui, st, dirty);
+        if (st.mtpConnected && st.mtpDev.IsConnected() &&
+            OSTicksToMilliseconds(OSGetSystemTime() - lastAoaUpdCheck) >= 2000) {
+            lastAoaUpdCheck = OSGetSystemTime();
+            if (TryApplyAoaSdUpdate(ui, st)) {
+                dirty = true;
+            }
+        }
 
         if (ui.HasForeground()) {
             InputSnapshot in = input.Poll(true);
@@ -2771,6 +3018,7 @@ int main() {
     gAudioMgr = nullptr;
     audio.Shutdown();
     input.Shutdown();
+    sdUpdater.Shutdown();
     ShutdownMochaFsa(st);
     if (sdMountedByUs) WHBUnmountSdCard();
     ui.Shutdown();

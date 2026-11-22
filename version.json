@@ -1,10 +1,10 @@
 {
-  "version": "2.0.2",
+  "version": "2.0.3",
   "release_date": "2026-11-22",
-  "repo_url": "https://github.com/supermafari007/WiiU-Transfer-Tools",
-  "release_url": "https://github.com/supermafari007/WiiU-Transfer-Tools/releases/tag/v2.0.2",
-  "wiiu_wuhb_url": "https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.2/WiiU_Transfer.wuhb",
-  "android_apk_url": "https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.2/WiiU_Transfer_Tools_Android.apk",
-  "pc_setup_url": "https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.2/WiiU_Transfer_Tools_Setup_v2.0.2.exe",
-  "notes": "Ver. 2.0.2: Instalador unico .EXE para Windows con desinstalador integrado (sin Python ni ZIPs), USB Android MTP estable (512B/ZLP + sincronizacion automatica), Cable Listo real, instalador automatico de APK en Android, sin sonido Pantalla Inicio y encabezado Wii U corregido."
+  "author": "El Diuca",
+  "repo": "https://github.com/supermafari007/WiiU-Transfer-Tools",
+  "wiiu_wuhb_url": "https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.3/WiiU_Transfer.wuhb",
+  "android_apk_url": "https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.3/WiiU_Transfer_Tools_Android.apk",
+  "pc_setup_url": "https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.3/WiiU_Transfer_Tools_Setup_v2.0.3.exe",
+  "notes": "Ver. 2.0.3: Carga de juegos desde cualquier carpeta del movil y Memoria USB (escaneo recursivo total), conexion USB directa AOA estable sin Depuracion USB, y actualizacion directa de WiiU_Transfer.wuhb en la SD desde Android y PC."
 }

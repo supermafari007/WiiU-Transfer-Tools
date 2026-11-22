@@ -23,11 +23,13 @@ constexpr uint32_t kMagicReq = 0x4F415557u; // "WUAO"
 constexpr uint32_t kMagicOk  = 0x4B4F5557u; // "WUOK"
 constexpr uint32_t kMagicErr = 0x52455557u; // "WUER"
 
-constexpr uint32_t kCmdPing      = 1;
-constexpr uint32_t kCmdListPkgs  = 2;
-constexpr uint32_t kCmdOpenFile  = 3;
-constexpr uint32_t kCmdReadChunk = 4;
-constexpr uint32_t kCmdCloseFile = 5;
+constexpr uint32_t kCmdPing         = 1;
+constexpr uint32_t kCmdListPkgs     = 2;
+constexpr uint32_t kCmdOpenFile     = 3;
+constexpr uint32_t kCmdReadChunk    = 4;
+constexpr uint32_t kCmdCloseFile    = 5;
+constexpr uint32_t kCmdCheckUpdate  = 6;
+constexpr uint32_t kCmdReadUpdate   = 7;
 
 constexpr uint16_t kGoogleVid    = 0x18D1u;
 constexpr uint16_t kAoaPidMin    = 0x2D00u;
@@ -297,6 +299,39 @@ public:
         return true;
     }
 
+    bool CheckPendingWuhbUpdate(uint32_t& outSize) {
+        outSize = 0;
+        if (!connected_) return false;
+        std::vector<uint8_t> resp;
+        uint32_t status = 0;
+        if (!ExchangeCommand(kCmdCheckUpdate, nullptr, 0, resp, status, 2500) ||
+            status != 0 || resp.size() < 4) {
+            return false;
+        }
+        outSize = usbfat::Rd32LE(resp.data());
+        return (outSize >= 64 * 1024 && outSize <= 32 * 1024 * 1024);
+    }
+
+    bool ReadWuhbUpdateChunk(uint32_t offset, uint32_t want, uint8_t* dst, uint32_t& outGot) {
+        outGot = 0;
+        if (!connected_) return false;
+        if (want > kAoaChunkSize) want = kAoaChunkSize;
+        uint8_t req[8]{};
+        Wr32LE(req + 0, offset);
+        Wr32LE(req + 4, want);
+        std::vector<uint8_t> resp;
+        uint32_t status = 0;
+        if (!ExchangeCommand(kCmdReadUpdate, req, 8, resp, status, 6000) || status != 0) {
+            return false;
+        }
+        uint32_t take = std::min<uint32_t>(static_cast<uint32_t>(resp.size()), want);
+        if (take > 0) {
+            std::memcpy(dst, resp.data(), take);
+        }
+        outGot = take;
+        return take > 0;
+    }
+
 private:
     static void OnInterfaceEvent(void* /*ctx*/, int32_t /*arg1*/, int32_t /*arg2*/) {}
 
@@ -390,7 +425,7 @@ private:
                         SendAoaString(prof.if_handle, 0, "El Diuca") &&
                         SendAoaString(prof.if_handle, 1, "Wii U Transfer Tools") &&
                         SendAoaString(prof.if_handle, 2, "Instalador USB directo de juegos Wii U") &&
-                        SendAoaString(prof.if_handle, 3, "2.0.2") &&
+                        SendAoaString(prof.if_handle, 3, "2.0.3") &&
                         SendAoaString(prof.if_handle, 4, "https://github.com/supermafari007/WiiU-Transfer-Tools") &&
                         SendAoaString(prof.if_handle, 5, "WIIU-TT-001");
 

@@ -32,12 +32,12 @@ from transfer_server import (
 )
 from ui_assets import ensure_pc_assets, make_rounded_corners_9slice, make_rounded_rect_img
 
-APP_VERSION = "2.0.2"
+APP_VERSION = "2.0.3"
 GITHUB_REPO_URL = "https://github.com/supermafari007/WiiU-Transfer-Tools"
 VERSION_JSON_URL = "https://raw.githubusercontent.com/supermafari007/WiiU-Transfer-Tools/main/version.json"
 RAW_PC_BASE_URL = "https://raw.githubusercontent.com/supermafari007/WiiU-Transfer-Tools/main/PC"
-DEFAULT_WUHB_URL = "https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.2/WiiU_Transfer.wuhb"
-DEFAULT_PC_SETUP_URL = "https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.2/WiiU_Transfer_Tools_Setup_v2.0.2.exe"
+DEFAULT_WUHB_URL = "https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.3/WiiU_Transfer.wuhb"
+DEFAULT_PC_SETUP_URL = "https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.3/WiiU_Transfer_Tools_Setup_v2.0.3.exe"
 
 # Habilitar nitidez HiDPI en Windows
 if sys.platform.startswith("win"):
@@ -1218,17 +1218,62 @@ class WiiUTransferApp:
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _download_wuhb_from_github(self, var_status: tk.StringVar, lbl: tk.Label) -> None:
-        save_path = filedialog.asksaveasfilename(
-            title="Guardar WiiU_Transfer.wuhb (Copia este archivo en SD:/wiiu/apps/)",
-            initialdir=str(self.base_dir),
-            initialfile="WiiU_Transfer.wuhb",
-            defaultextension=".wuhb",
-            filetypes=[("Aplicación Wii U (.wuhb)", "*.wuhb"), ("Todos los archivos", "*.*")],
-        )
-        if not save_path:
-            return
+    def _find_wiiu_sd_apps_dir(self) -> Path | None:
+        if sys.platform.startswith("win"):
+            for letter in "DEFGHIJKLMNOPQRSTUVWXYZ":
+                cand = Path(f"{letter}:/wiiu/apps")
+                if cand.is_dir():
+                    return cand
+        return None
 
+    def _discover_wiiu_console_ip(self) -> str | None:
+        import socket
+        ds = None
+        try:
+            ds = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            ds.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            ds.settimeout(1.5)
+            ds.sendto(b"WIIU_FIND_CONSOLE", ("255.255.255.255", 7333))
+            data, addr = ds.recvfrom(128)
+            if data.startswith(b"WIIU_CONSOLE_HERE"):
+                return addr[0]
+        except Exception:
+            pass
+        finally:
+            if ds:
+                try:
+                    ds.close()
+                except Exception:
+                    pass
+        try:
+            stats = self.server.get_stats(reset_window=False)
+            clients = stats.get("active_clients") or []
+            if clients:
+                return str(clients[0])
+        except Exception:
+            pass
+        return None
+
+    def _push_wuhb_to_wiiu_tcp(self, ip: str, blob: bytes) -> bool:
+        import socket, struct
+        s = None
+        try:
+            s = socket.create_connection((ip, 7333), timeout=3.5)
+            s.settimeout(15.0)
+            s.sendall(b"WUPU" + struct.pack("<I", len(blob)))
+            s.sendall(blob)
+            ack = s.recv(16)
+            return ack.startswith(b"OK")
+        except Exception:
+            return False
+        finally:
+            if s:
+                try:
+                    s.close()
+                except Exception:
+                    pass
+
+    def _download_wuhb_from_github(self, var_status: tk.StringVar, lbl: tk.Label) -> None:
         var_status.set("Descargando WiiU_Transfer.wuhb desde GitHub...")
         lbl.configure(fg=COL_CYAN_HI)
 
@@ -1240,16 +1285,65 @@ class WiiUTransferApp:
                 )
                 with urllib.request.urlopen(req, timeout=25) as resp:
                     blob = resp.read()
-                Path(save_path).write_bytes(blob)
-                if self.root.winfo_exists():
-                    self.root.after(
-                        0,
-                        lambda: (
-                            var_status.set(f"WiiU_Transfer.wuhb guardado ({format_bytes(len(blob))})"),
-                            lbl.configure(fg=COL_GREEN_HI),
-                            self._enqueue_log("OK", f"App Wii U descargada en: {save_path}"),
-                        ),
+                if len(blob) < 64 * 1024 or not blob.startswith(b"WUHB"):
+                    raise RuntimeError("Archivo .wuhb invalido")
+
+                # 1. Si hay una Tarjeta SD de Wii U conectada al PC, sobrescribirla directamente
+                sd_apps = self._find_wiiu_sd_apps_dir()
+                if sd_apps is not None:
+                    dst = sd_apps / "WiiU_Transfer.wuhb"
+                    dst.write_bytes(blob)
+                    if self.root.winfo_exists():
+                        self.root.after(
+                            0,
+                            lambda: (
+                                var_status.set(f"App Wii U sobrescrita en la SD ({dst})!"),
+                                lbl.configure(fg=COL_GREEN_HI),
+                                self._enqueue_log("OK", f"App Wii U actualizada directamente en SD: {dst}"),
+                                messagebox.showinfo("Actualizado en SD", f"WiiU_Transfer.wuhb se sobrescribió correctamente en:\n{dst}"),
+                            ),
+                        )
+                    return
+
+                # 2. Si la Wii U esta abierta en la red local, enviarlo directo a la SD por Wi-Fi (puerto 7333)
+                wiiu_ip = self._discover_wiiu_console_ip()
+                if wiiu_ip and self._push_wuhb_to_wiiu_tcp(wiiu_ip, blob):
+                    if self.root.winfo_exists():
+                        self.root.after(
+                            0,
+                            lambda: (
+                                var_status.set(f"App Wii U sobrescrita en la SD de tu consola ({wiiu_ip})!"),
+                                lbl.configure(fg=COL_GREEN_HI),
+                                self._enqueue_log("OK", f"App Wii U enviada y sobrescrita en la SD de Wii U ({wiiu_ip})."),
+                                messagebox.showinfo(
+                                    "Actualizado en Wii U",
+                                    f"WiiU_Transfer.wuhb se envió y sobrescribió en la SD de tu Wii U ({wiiu_ip}).\n\n"
+                                    "Cierra y vuelve a abrir la app en la consola para usar la nueva versión.",
+                                ),
+                            ),
+                        )
+                    return
+
+                # 3. Fallback: preguntar donde guardar en el PC
+                def ask_save() -> None:
+                    save_path = filedialog.asksaveasfilename(
+                        title="Guardar WiiU_Transfer.wuhb (Copia este archivo en SD:/wiiu/apps/)",
+                        initialdir=str(self.base_dir),
+                        initialfile="WiiU_Transfer.wuhb",
+                        defaultextension=".wuhb",
+                        filetypes=[("Aplicación Wii U (.wuhb)", "*.wuhb"), ("Todos los archivos", "*.*")],
                     )
+                    if not save_path:
+                        var_status.set("Descarga cancelada.")
+                        lbl.configure(fg=COL_MUTED)
+                        return
+                    Path(save_path).write_bytes(blob)
+                    var_status.set(f"WiiU_Transfer.wuhb guardado ({format_bytes(len(blob))})")
+                    lbl.configure(fg=COL_GREEN_HI)
+                    self._enqueue_log("OK", f"App Wii U descargada en: {save_path}")
+
+                if self.root.winfo_exists():
+                    self.root.after(0, ask_save)
             except Exception as exc:
                 if self.root.winfo_exists():
                     self.root.after(

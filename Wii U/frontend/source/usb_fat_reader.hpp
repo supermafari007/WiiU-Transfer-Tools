@@ -9,6 +9,7 @@
 #include <cctype>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -566,44 +567,50 @@ public:
             return false;
         }
 
-        auto scanContainerDir = [&](const std::vector<DirEntry>& entries) {
-            for (const auto& e : entries) {
-                if (!e.isDir || e.name.empty() || e.name[0] == '.') continue;
-                if (EqualsCI(e.name, "System Volume Information") ||
-                    EqualsCI(e.name, "$RECYCLE.BIN") ||
-                    EqualsCI(e.name, "LOST.DIR") ||
-                    EqualsCI(e.name, "Android") ||
-                    EqualsCI(e.name, "wiiu") ||
-                    EqualsCI(e.name, "install") ||
-                    EqualsCI(e.name, "packages") ||
-                    EqualsCI(e.name, "WiiU_Transfer")) {
-                    continue;
-                }
-
-                UsbPkg pkg;
-                pkg.name = e.name;
-                bool looksLikeWup = false;
-                CollectFilesRecursive(e, "", 0, pkg.files, pkg.totalBytes, looksLikeWup);
-                if (looksLikeWup && !pkg.files.empty()) {
-                    outPkgs.push_back(std::move(pkg));
-                }
-            }
+        auto isSystemSkip = [](const std::string& name) -> bool {
+            return name.empty() || name[0] == '.' ||
+                   EqualsCI(name, "System Volume Information") ||
+                   EqualsCI(name, "$RECYCLE.BIN") ||
+                   EqualsCI(name, "LOST.DIR") ||
+                   EqualsCI(name, "Android") ||
+                   EqualsCI(name, "wiiu");
         };
 
-        // 1. Carpetas de juegos en la raiz de la Memoria USB
-        scanContainerDir(rootEntries);
+        std::function<void(const std::vector<DirEntry>&, int)> scanRecursive =
+            [&](const std::vector<DirEntry>& entries, int depth) {
+                if (depth > 3 || outPkgs.size() >= 128) return;
+                for (const auto& e : entries) {
+                    if (!e.isDir || isSystemSkip(e.name)) continue;
 
-        // 2. Carpetas de juegos dentro de /install, /packages o /WiiU_Transfer si existen
-        for (const auto& e : rootEntries) {
-            if (e.isDir && (EqualsCI(e.name, "install") ||
-                            EqualsCI(e.name, "packages") ||
-                            EqualsCI(e.name, "WiiU_Transfer"))) {
-                std::vector<DirEntry> subEntries;
-                if (ListSubDirectory(e, subEntries)) {
-                    scanContainerDir(subEntries);
+                    std::vector<DirEntry> sub;
+                    if (!ListSubDirectory(e, sub)) continue;
+
+                    bool hasDirectWup = false;
+                    for (const auto& c : sub) {
+                        if (!c.isDir && (EndsWithCI(c.name, ".tmd") ||
+                                         EndsWithCI(c.name, ".tik") ||
+                                         EndsWithCI(c.name, ".app"))) {
+                            hasDirectWup = true;
+                            break;
+                        }
+                    }
+
+                    if (hasDirectWup) {
+                        UsbPkg pkg;
+                        pkg.name = e.name;
+                        bool looksLikeWup = false;
+                        CollectFilesRecursive(e, "", 0, pkg.files, pkg.totalBytes, looksLikeWup);
+                        if (looksLikeWup && !pkg.files.empty()) {
+                            outPkgs.push_back(std::move(pkg));
+                        }
+                    } else {
+                        // Carpeta contenedora (ej. /install, /WUP, /Download, /Juegos, etc.)
+                        scanRecursive(sub, depth + 1);
+                    }
                 }
-            }
-        }
+            };
+
+        scanRecursive(rootEntries, 0);
         return true;
     }
 
