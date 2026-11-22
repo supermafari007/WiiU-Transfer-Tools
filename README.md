@@ -6,15 +6,15 @@
 
 Desarrollado por **El Diuca**.
 
-**Versión 2.0.1** — Aplicación para consola Wii U (`.wuhb`), Aplicación para Android 9+ (`.apk`) y Programa para PC Windows con Instalador Gráfico.
+**Versión 2.0.2** — Aplicación para consola Wii U (`.wuhb`), Aplicación para Android 9+ (`.apk`) y Programa de PC para Windows en **Microsoft Edge WebView2** con Instalador Gráfico.
 
 **Wii U Transfer Tools** permite transferir e instalar juegos de Wii U en consolas con Aroma utilizando **lenguaje 100% simple** y sin pasos técnicos, ya sea desde una **Memoria USB (`exFAT`, `FAT32`, `NTFS` o `FAT`)**, desde tu **Celular Android** (por cable USB o por Wi-Fi) o desde tu **PC con Windows** (por Wi-Fi o adaptador de red LAN USB).
 
 Este proyecto es **software de código abierto bajo la licencia MIT**. Consulta [LICENSE](LICENSE) para conocer los términos de uso, modificación y redistribución.
 
-## Así se ve Wii U Transfer Tools (Ver. 2.0.1)
+## Así se ve Wii U Transfer Tools (Ver. 2.0.2)
 
-| En la consola Wii U (`Modo USB` / `Modo Red`) | Programa de PC + Instalador para Windows |
+| En la consola Wii U (`Modo USB` / `Modo Red`) | Programa de PC en WebView2 para Windows |
 |:---:|:---:|
 | ![Wii U Transfer Tools en TV y GamePad](Imagenes/1_WiiU_Transfer_Tools_consola.png) | ![Programa de Wii U Transfer Tools para PC](Imagenes/2_WiiU_Transfer_Tools_PC.png) |
 
@@ -22,17 +22,18 @@ Este proyecto es **software de código abierto bajo la licencia MIT**. Consulta 
   <img src="Imagenes/6_WiiU_Transfer_Tools_Android_MTP.png" alt="Wii U Transfer Tools para Android 9+" width="820">
 </p>
 
-## Descargar la versión 2.0.1
+## Descargar la versión 2.0.2
 
-* **Wii U (Aroma):** [WiiU_Transfer.wuhb](https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.1/WiiU_Transfer.wuhb) — listo para copiar en `sd:/wiiu/apps/WiiU_Transfer.wuhb`.
-* **PC (Windows 10/11):** [WiiU-Transfer-Tools-PC-v2.0.1.zip](https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.1/WiiU-Transfer-Tools-PC-v2.0.1.zip) — incluye el programa para PC y el instalador gráfico `Instalar_WiiU_Transfer_Tools.bat`.
-* **Android (Android 9.0 o superior):** [WiiU_Transfer_Tools_Android.apk](https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.1/WiiU_Transfer_Tools_Android.apk) — aplicación para transferir por cable USB o por Wi-Fi.
+* **Wii U (Aroma):** [WiiU_Transfer.wuhb](https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.2/WiiU_Transfer.wuhb) — listo para copiar en `sd:/wiiu/apps/WiiU_Transfer.wuhb`.
+* **PC (Windows 10/11 — WebView2):** [WiiU-Transfer-Tools-PC-v2.0.2.zip](https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.2/WiiU-Transfer-Tools-PC-v2.0.2.zip) — incluye la nueva aplicación nativa en **Microsoft Edge WebView2** y su instalador gráfico `Instalar_WiiU_Transfer_Tools.bat`.
+* **Android (Android 9.0 o superior):** [WiiU_Transfer_Tools_Android.apk](https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.2/WiiU_Transfer_Tools_Android.apk) — sincronización automática por cable USB o Wi-Fi con instalador integrado de actualizaciones `.apk`.
 
-## Novedades de la Versión 2.0.1
+## Novedades de la Versión 2.0.2
 
-* **Corrección crítica de conexión USB con Android (`nsysuhs` MTP):** Corregido el direccionamiento de endpoints de 4 bits en `UhsSubmitBulkRequest`, tamaño DMA seguro de 64 KB (respaldo 16 KB) y escaneo de los 3 controladores USB con hasta 32 interfaces para teléfonos compuestos (Motorola, Samsung, Xiaomi, etc.).
-* **Aceleración real del Modo Red (Wi-Fi y LAN USB):** Espera real de inicialización `SOMEMOPT_REQUEST_WAIT_FOR_INIT` (pool de 2 MB), recepción TCP sin sobrecarga por paquete y `WifiLock` de baja latencia + `WakeLock` en Android.
-* **Inicio instantáneo con sonido:** El audio *"Pantalla Inicio"* suena al instante durante la pantalla de carga y, en cuanto termina de inicializar, entra directo a la interfaz principal sin esperar botón e inicia automáticamente el *"Tema de Fondo"*.
+* **Programa de PC migrado a Microsoft Edge WebView2:** Interfaz moderna fluida, barra de progreso animada en vivo, selector nativo de carpetas e instalador gráfico también en WebView2.
+* **Estabilidad total en USB Android (MTP):** Lecturas USB Bulk IN alineadas a múltiplos exactos de 512 bytes (elimina cortes de *USB Babble* en EHCI), manejo de paquetes ZLP, reintentos automáticos y soporte para `/Download`, `/Descargas` o cualquier carpeta elegida en la App Android.
+* **App Android más simple y automática:** Eliminado el botón *"Preparar Juegos para USB"* (al elegir carpeta o marcar juegos se sincronizan automáticamente con la Wii U), el indicador verde **`Cable Listo`** solo se enciende cuando Android establece conexión USB de transferencia real con la Wii U, y al descargar una actualización `.apk` se lanza automáticamente el instalador de Android.
+* **Pulido en consola Wii U:** Eliminado el sonido *"Pantalla Inicio"* (entra directo al *"Tema de Fondo"* en la interfaz principal) y corregido el espacio entre el subtítulo y el selector **`Modo USB | Modo Red`**.
 
 ## Novedades de la Versión 2.0.0
 

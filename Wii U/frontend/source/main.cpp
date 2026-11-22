@@ -62,7 +62,7 @@ constexpr uint32_t SOMEMOPT_BUF_SIZE = 0x200000;        // 2 MB para pool TCP ns
 constexpr uint32_t SOMEMOPT_STACK_SZ = 16 * 1024;
 constexpr uint32_t WRITER_STACK_SIZE = 32 * 1024;
 constexpr uint32_t UI_REFRESH_MS     = 450;
-constexpr const char* APP_VERSION_STR = "v2.0.1";
+constexpr const char* APP_VERSION_STR = "v2.0.2";
 
 wutaudio::AudioManager* gAudioMgr = nullptr;
 
@@ -1413,7 +1413,7 @@ void DrawUI(wutui::UiCanvas& ui, const AppState& st) {
     ui.FillRect(0, 94, wutui::LOGICAL_W, 2, wutui::COL_CYAN);
     ui.DrawGamepadIcon(28, 10);
     ui.DrawText(146, 16, "Wii U Transfer Tools", wutui::COL_WHITE, wutui::FontId::Header);
-    ui.DrawText(146, 58, "por El Diuca  *  Ver. 2.0.1  *  Instalador de Juegos", wutui::COL_CYAN_SUB, wutui::FontId::Body);
+    ui.DrawText(146, 58, "por El Diuca  *  Ver. 2.0.2", wutui::COL_CYAN_SUB, wutui::FontId::Body, 376);
 
     // Selector simplificado de 2 pestañas [X]: Modo USB | Modo Red (x=536..872)
     ui.FillRoundedRect(536, 24, 336, 48, 24, wutui::COL_PILL_OFF);
@@ -2525,17 +2525,11 @@ int main() {
         return 1;
     }
 
-    // Mostrar pantalla de inicio inmediatamente (misma imagen que el splash del .wuhb)
+    // Mostrar pantalla de carga inmediatamente (misma imagen que el splash del .wuhb)
     ui.DrawSplashScreen();
     ui.Present();
     ui.DrawSplashScreen();
     ui.Present();
-
-    // Iniciar sonido "Pantalla Inicio" de inmediato al abrir la app (solo carga 158 KB, <20 ms)
-    wutaudio::AudioManager audio;
-    audio.InitAxAndIntro();
-    gAudioMgr = &audio;
-    audio.StartIntro();
 
     InputManager input;
     input.Init();
@@ -2543,8 +2537,13 @@ int main() {
     AppState st;
     bool sdMountedByUs = (WHBMountSdCard() != FALSE);
 
-    // Mientras suena "Pantalla Inicio" en la pantalla de carga, decodificamos BGM e inicializamos Mocha, USB y Red
+    // Inicializar audio solo con Tema de Fondo (sin sonido de Pantalla Inicio)
+    wutaudio::AudioManager audio;
+    audio.InitAxOnly();
+    gAudioMgr = &audio;
     audio.LoadBgm();
+
+    // Inicializar Mocha, USB y Red
     InitMochaFsa(st);
     UpdateAllFreeSpace(st);
     bool foundUsbOnBoot = ScanUnifiedUsb(st);
@@ -2558,8 +2557,7 @@ int main() {
         }
     }
 
-    // Una vez lista la herramienta, pasar directo a la interfaz de uso (sin esperar ningun boton)
-    // y comenzar a reproducir "Tema de Fondo" en bucle continuo
+    // Pasar directo a la interfaz principal y comenzar a reproducir "Tema de Fondo" en bucle
     audio.StartBgm();
 
     if (foundUsbOnBoot) {

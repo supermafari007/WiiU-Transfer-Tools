@@ -126,7 +126,7 @@ def make_splash_image(w: int, h: int, is_icon: bool) -> Image.Image:
         f_sub = ImageFont.load_default()
 
     title = "Wii U Transfer Tools"
-    sub = "Desarrollado por El Diuca  -  Ver. 2.0.1  (Modo USB / Modo Red)"
+    sub = "Desarrollado por El Diuca  -  Ver. 2.0.2  (Modo USB / Modo Red)"
     tb = draw.textbbox((0, 0), title, font=f_title)
     sb = draw.textbbox((0, 0), sub, font=f_sub)
     draw.text(((w - (tb[2] - tb[0])) // 2, int(h * 0.59)), title, fill=COL_WHITE, font=f_title)
@@ -434,13 +434,12 @@ def main() -> None:
     splash_hpp_path = root / "source" / "splash_screen.hpp"
     generate_splash_screen_hpp(tv_img, splash_hpp_path)
 
-    # Convertir sonidos desde Sonidos/ hacia content/ (para empaquetar en .wuhb)
+    # Convertir solo Tema de Fondo desde Sonidos/ hacia content/ (sin Pantalla Inicio)
     sounds_dir = root.parent.parent / "Sonidos"
-    intro_wav = sounds_dir / "Pantalla Inicio.wav"
+    old_intro = content_dir / "intro.wia"
+    if old_intro.exists():
+        old_intro.unlink()
     bgm_wav = sounds_dir / "Tema de Fondo.wav"
-    if intro_wav.exists():
-        convert_wav_to_wia_and_raw(intro_wav, content_dir / "intro.wia")
-        print("Audio intro generado:", content_dir / "intro.wia")
     if bgm_wav.exists():
         convert_wav_to_wia_and_raw(bgm_wav, content_dir / "bgm.wia")
         print("Audio BGM generado:", content_dir / "bgm.wia")

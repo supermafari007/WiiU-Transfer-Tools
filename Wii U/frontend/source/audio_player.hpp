@@ -47,8 +47,7 @@ public:
         return true;
     }
 
-    // Inicializa AX, carga solo intro.wia (~158 KB, <20 ms) para que Pantalla Inicio suene al instante
-    bool InitAxAndIntro() {
+    bool InitAxOnly() {
         if (!axInit_) {
             AXInitParams params{};
             params.renderer = AX_INIT_RENDERER_48KHZ;
@@ -56,6 +55,12 @@ public:
             AXInitWithParams(&params);
             axInit_ = true;
         }
+        return true;
+    }
+
+    // Inicializa AX, carga solo intro.wia (~158 KB, <20 ms) para que Pantalla Inicio suene al instante
+    bool InitAxAndIntro() {
+        InitAxOnly();
         if (!introLoaded_) {
             introLoaded_ = LoadWiaTrack("/vol/content/intro.wia",
                                         "fs:/vol/external01/wiiu/apps/WiiU_Transfer/intro.wia",

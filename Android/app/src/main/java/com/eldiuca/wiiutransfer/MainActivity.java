@@ -71,7 +71,7 @@ import java.util.zip.ZipInputStream;
  */
 public class MainActivity extends Activity {
 
-    public static final String APP_VERSION = "2.0.1";
+    public static final String APP_VERSION = "2.0.2";
     public static final String GITHUB_REPO_URL = "https://github.com/supermafari007/WiiU-Transfer-Tools";
     public static final String VERSION_JSON_URL = "https://raw.githubusercontent.com/supermafari007/WiiU-Transfer-Tools/main/version.json";
     public static final String DEFAULT_APK_URL = "https://raw.githubusercontent.com/supermafari007/WiiU-Transfer-Tools/main/Android/WiiU_Transfer_Tools_Android.apk";
@@ -109,8 +109,9 @@ public class MainActivity extends Activity {
     private PowerManager.WakeLock wakeLock;
 
     private boolean isUsbMtpTab = true;
-    private boolean usbPlugged = false;
-    private boolean mtpQueueExposed = false;
+    private boolean usbDataConnected = false;
+    private boolean usbConfigured = false;
+    private boolean usbMtpEnabled = false;
     private long lastStatTimeMs = System.currentTimeMillis();
 
     // Estado de actualización desde GitHub
@@ -148,15 +149,23 @@ public class MainActivity extends Activity {
     private TextView btnPrimaryAction;
     private TextView btnSecondaryAction;
 
-    private final BroadcastReceiver usbBatteryReceiver = new BroadcastReceiver() {
+    private static final String ACTION_USB_STATE = "android.hardware.usb.action.USB_STATE";
+
+    private final BroadcastReceiver usbStateReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
             if (intent == null) return;
-            int plugged = intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0);
-            boolean isUsb = (plugged & BatteryManager.BATTERY_PLUGGED_USB) != 0;
-            if (isUsb != usbPlugged) {
-                usbPlugged = isUsb;
+            boolean conn = intent.getBooleanExtra("connected", false);
+            boolean conf = intent.getBooleanExtra("configured", false);
+            boolean mtp  = intent.getBooleanExtra("mtp", false) || intent.getBooleanExtra("ptp", false);
+            if (conn != usbDataConnected || conf != usbConfigured || mtp != usbMtpEnabled) {
+                usbDataConnected = conn;
+                usbConfigured = conf;
+                usbMtpEnabled = mtp;
                 updateConnectionCardUi();
+                if (usbDataConnected && usbConfigured && usbMtpEnabled) {
+                    syncQueueToUsbAutomatically();
+                }
             }
         }
     };
@@ -208,7 +217,13 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        registerReceiver(usbBatteryReceiver, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+        Intent stickyUsb = registerReceiver(usbStateReceiver, new IntentFilter(ACTION_USB_STATE));
+        if (stickyUsb != null) {
+            usbDataConnected = stickyUsb.getBooleanExtra("connected", false);
+            usbConfigured = stickyUsb.getBooleanExtra("configured", false);
+            usbMtpEnabled = stickyUsb.getBooleanExtra("mtp", false) || stickyUsb.getBooleanExtra("ptp", false);
+            updateConnectionCardUi();
+        }
         uiHandler.post(uiPollRunnable);
     }
 
@@ -216,7 +231,7 @@ public class MainActivity extends Activity {
     protected void onPause() {
         super.onPause();
         try {
-            unregisterReceiver(usbBatteryReceiver);
+            unregisterReceiver(usbStateReceiver);
         } catch (Exception ignored) {
         }
         uiHandler.removeCallbacks(uiPollRunnable);
@@ -719,6 +734,7 @@ public class MainActivity extends Activity {
         server.setMarkedQueue(markedNames, true);
         rebuildPackageListViews();
         updateBottomSummaryUi();
+        syncQueueToUsbAutomatically();
     }
 
     private void rebuildPackageListViews() {
@@ -837,6 +853,7 @@ public class MainActivity extends Activity {
                     server.setMarkedQueue(markedNames, true);
                     rebuildPackageListViews();
                     updateBottomSummaryUi();
+                    syncQueueToUsbAutomatically();
                 }
             });
 
@@ -860,6 +877,7 @@ public class MainActivity extends Activity {
         server.setMarkedQueue(markedNames, true);
         rebuildPackageListViews();
         updateBottomSummaryUi();
+        syncQueueToUsbAutomatically();
     }
 
     private void updateConnectionCardUi() {
@@ -868,18 +886,24 @@ public class MainActivity extends Activity {
 
         if (isUsbMtpTab) {
             connTagText.setText("CONECTAR POR CABLE USB A LA WII U");
-            if (usbPlugged) {
-                connTitleText.setText("Cable USB detectado en el celular");
-                connSubText.setText("Elige 'Transferencia de archivos' en Android y 'Modo USB' en Wii U");
+            if (usbDataConnected && usbConfigured && usbMtpEnabled) {
+                connTitleText.setText("Conectado por USB a la Wii U (Transferencia activa)");
+                connSubText.setText("Tu selecci\u00f3n se sincroniza sola. En Wii U elige 'Modo USB' y pulsa [Y]");
                 headerPillLayout.setBackground(roundedShape(COL_GREEN, dp(14), 0, 0));
                 headerPillDot.setBackground(circleShape(Color.parseColor("#B4FFD2")));
                 headerPillText.setText("Cable Listo");
+            } else if (usbDataConnected) {
+                connTitleText.setText("Cable conectado: activa 'Transferencia de archivos'");
+                connSubText.setText("Toca 'Ajustes USB' abajo y selecciona 'Transferencia de archivos'");
+                headerPillLayout.setBackground(roundedShape(COL_AMBER_BG, dp(14), dp(1), COL_AMBER_BD));
+                headerPillDot.setBackground(circleShape(COL_AMBER_TX));
+                headerPillText.setText("Activa USB");
             } else {
                 connTitleText.setText("Conecta el celular al USB frontal de la Wii U");
-                connSubText.setText("En Android elige 'Transferencia de archivos' y en Wii U 'Modo USB'");
-                headerPillLayout.setBackground(roundedShape(mtpQueueExposed ? COL_GREEN : COL_PILL_OFF, dp(14), 0, 0));
-                headerPillDot.setBackground(circleShape(mtpQueueExposed ? COL_GREEN_HI : COL_MUTED));
-                headerPillText.setText(mtpQueueExposed ? "USB Listo" : "Sin Cable");
+                connSubText.setText("Al conectar elige 'Transferencia de archivos' y en Wii U 'Modo USB'");
+                headerPillLayout.setBackground(roundedShape(COL_PILL_OFF, dp(14), 0, 0));
+                headerPillDot.setBackground(circleShape(COL_MUTED));
+                headerPillText.setText("Sin Conexi\u00f3n");
             }
         } else {
             connTagText.setText("ENVIAR JUEGOS POR WI-FI A LA WII U");
@@ -911,15 +935,17 @@ public class MainActivity extends Activity {
             }
         }
 
-        String modeLabel = isUsbMtpTab ? "Listo para Modo USB" : "Modo Red Wi-Fi";
+        String modeLabel = isUsbMtpTab ? "Sincronizaci\u00f3n USB autom\u00e1tica" : "Modo Red Wi-Fi";
         bottomSummaryTitle.setText(markedCount + (markedCount == 1 ? " juego seleccionado (" : " juegos seleccionados (") +
                 NfsaTransferServer.formatBytes(markedBytes) + ")  \u2022  " + modeLabel);
 
         if (isUsbMtpTab) {
-            btnPrimaryAction.setText("Preparar Juegos para USB (" + markedCount + ")");
-            btnPrimaryAction.setBackground(roundedShape(COL_CYAN, dp(10), 0, 0));
-            btnSecondaryAction.setVisibility(View.VISIBLE);
-            bottomSummarySub.setText("En tu Wii U elige 'Modo USB' [X] y pulsa [Y] para ver tus juegos");
+            btnPrimaryAction.setText("Ajustes USB del Celular");
+            btnPrimaryAction.setBackground(roundedShape(COL_BTN_OFF, dp(10), dp(1), COL_CYAN));
+            btnSecondaryAction.setVisibility(View.GONE);
+            bottomSummarySub.setText(usbDataConnected && usbConfigured && usbMtpEnabled
+                    ? "Conectado y sincronizado. Pulsa [Y] en tu Wii U para instalar."
+                    : "Solo selecciona tus juegos arriba y conecta el cable USB a tu Wii U.");
         } else {
             boolean netRunning = (server != null && server.isRunning());
             btnPrimaryAction.setText(netRunning
@@ -935,7 +961,7 @@ public class MainActivity extends Activity {
         int trackW = progressTrackLayout.getWidth();
         if (trackW > 0) {
             float ratio = packages.isEmpty() ? 0f : ((float) markedCount / (float) packages.size());
-            if (mtpQueueExposed && markedCount > 0) ratio = 1.0f;
+            if (usbDataConnected && usbMtpEnabled && markedCount > 0) ratio = 1.0f;
             int fillW = Math.max(dp(6), (int) (trackW * ratio));
             progressFillView.setLayoutParams(new FrameLayout.LayoutParams(fillW, dp(12)));
         }
@@ -946,40 +972,62 @@ public class MainActivity extends Activity {
             toggleNetworkServer();
             return;
         }
-        exposeQueueToMtpDatabase();
+        openUsbSettings();
     }
 
-    private void exposeQueueToMtpDatabase() {
-        final List<String> pathsToIndex = new ArrayList<String>();
-        int markedPkgCount = 0;
+    private void syncQueueToUsbAutomatically() {
+        final File folderSnap = activeFolder;
+        final List<File> selectedDirs = new ArrayList<File>();
+        final List<String> selectedNames = new ArrayList<String>();
         for (NfsaTransferServer.WupPackage p : packages) {
             if (p.marked) {
-                markedPkgCount++;
-                collectAllPaths(p.directory, pathsToIndex);
+                selectedDirs.add(p.directory);
+                selectedNames.add(p.name);
             }
         }
 
-        if (markedPkgCount == 0) {
-            Toast.makeText(this, "Selecciona al menos 1 juego en la lista.", Toast.LENGTH_SHORT).show();
-            return;
-        }
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    File extRoot = Environment.getExternalStorageDirectory();
+                    File metaDir = new File(extRoot, "WiiU_Transfer");
+                    if (!metaDir.exists()) metaDir.mkdirs();
+                    File queueFile = new File(metaDir, "wiiu_queue.txt");
 
-        mtpQueueExposed = true;
-        bottomSummarySub.setText("Preparando " + pathsToIndex.size() + " archivos del juego para conexi\u00f3n USB...");
-        updateConnectionCardUi();
-        updateBottomSummaryUi();
+                    String rootPath = extRoot.getCanonicalPath();
+                    String activePath = folderSnap.getCanonicalPath();
+                    String relFolder = "";
+                    if (activePath.startsWith(rootPath)) {
+                        relFolder = activePath.substring(rootPath.length()).replace('\\', '/');
+                        while (relFolder.startsWith("/")) relFolder = relFolder.substring(1);
+                    }
 
-        if (!pathsToIndex.isEmpty()) {
-            String[] arr = pathsToIndex.toArray(new String[0]);
-            MediaScannerConnection.scanFile(this, arr, null, new MediaScannerConnection.OnScanCompletedListener() {
-                @Override
-                public void onScanCompleted(String path, Uri uri) {
+                    StringBuilder sb = new StringBuilder();
+                    sb.append("FOLDER=").append(relFolder).append("\n");
+                    for (String name : selectedNames) {
+                        sb.append("GAME=").append(name).append("\n");
+                    }
+                    FileOutputStream fos = new FileOutputStream(queueFile);
+                    fos.write(sb.toString().getBytes("UTF-8"));
+                    fos.close();
+
+                    List<String> pathsToIndex = new ArrayList<String>();
+                    pathsToIndex.add(queueFile.getAbsolutePath());
+                    for (File d : selectedDirs) {
+                        collectAllPaths(d, pathsToIndex);
+                    }
+                    if (!pathsToIndex.isEmpty()) {
+                        MediaScannerConnection.scanFile(
+                                getApplicationContext(),
+                                pathsToIndex.toArray(new String[0]),
+                                null,
+                                null);
+                    }
+                } catch (Exception ignored) {
                 }
-            });
-        }
-
-        bottomSummarySub.setText("Juegos listos para USB (" + markedPkgCount + "). En tu Wii U elige 'Modo USB' [X] y pulsa [Y].");
-        Toast.makeText(this, "Juegos listos para USB. Pulsa [Y] en tu Wii U.", Toast.LENGTH_LONG).show();
+            }
+        }, "Auto-MTP-Sync").start();
     }
 
     private void openUsbSettings() {
@@ -1397,7 +1445,9 @@ public class MainActivity extends Activity {
                     dlDir = new File(Environment.getExternalStorageDirectory(), "Download");
                 }
                 if (!dlDir.exists()) dlDir.mkdirs();
-                final File outFile = new File(dlDir, outFileName);
+                final File outFile = outFileName.endsWith(".apk")
+                        ? new File(getCacheDir(), outFileName)
+                        : new File(dlDir, outFileName);
 
                 HttpURLConnection conn = null;
                 boolean ok = false;
@@ -1430,14 +1480,22 @@ public class MainActivity extends Activity {
                     @Override
                     public void run() {
                         if (finalOk) {
-                            MediaScannerConnection.scanFile(MainActivity.this,
-                                    new String[]{outFile.getAbsolutePath()}, null, null);
-                            if (statusView != null) {
-                                statusView.setText("Guardado en /Download/" + outFileName);
-                                statusView.setTextColor(COL_GREEN_HI);
+                            if (outFileName.endsWith(".apk")) {
+                                if (statusView != null) {
+                                    statusView.setText("Abriendo instalador de actualizaci\u00f3n...");
+                                    statusView.setTextColor(COL_GREEN_HI);
+                                }
+                                launchApkInstaller(outFileName);
+                            } else {
+                                MediaScannerConnection.scanFile(MainActivity.this,
+                                        new String[]{outFile.getAbsolutePath()}, null, null);
+                                if (statusView != null) {
+                                    statusView.setText("Guardado en /Download/" + outFileName);
+                                    statusView.setTextColor(COL_GREEN_HI);
+                                }
+                                Toast.makeText(MainActivity.this,
+                                        "Descargado en /Download/" + outFileName, Toast.LENGTH_LONG).show();
                             }
-                            Toast.makeText(MainActivity.this,
-                                    "Descargado en /Download/" + outFileName, Toast.LENGTH_LONG).show();
                         } else {
                             if (statusView != null) {
                                 statusView.setText("Abriendo descarga en el navegador...");
@@ -1452,6 +1510,26 @@ public class MainActivity extends Activity {
                 });
             }
         }, "GitHub-File-Downloader").start();
+    }
+
+    private void launchApkInstaller(String apkName) {
+        try {
+            if (Build.VERSION.SDK_INT >= 26 && !getPackageManager().canRequestPackageInstalls()) {
+                Toast.makeText(this, "Activa 'Permitir desde esta fuente' y vuelve a pulsar Instalar.", Toast.LENGTH_LONG).show();
+                Intent permIntent = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:" + getPackageName()));
+                permIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(permIntent);
+                return;
+            }
+            Uri apkUri = Uri.parse("content://" + ApkFileProvider.AUTHORITY + "/" + apkName);
+            Intent installIntent = new Intent(Intent.ACTION_VIEW);
+            installIntent.setDataAndType(apkUri, "application/vnd.android.package-archive");
+            installIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(installIntent);
+        } catch (Exception e) {
+            Toast.makeText(this, "No se pudo abrir el instalador: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
     }
 
     // =========================================================================
@@ -1537,7 +1615,6 @@ public class MainActivity extends Activity {
                     public void onClick(DialogInterface dialog, int which) {
                         if (which == 0) {
                             refreshPackages();
-                            exposeQueueToMtpDatabase();
                         } else if (which == 1) {
                             activeFolder = new File(Environment.getExternalStorageDirectory(), "Download");
                             server.setRootDir(activeFolder);
@@ -1617,7 +1694,6 @@ public class MainActivity extends Activity {
                         if (finalOk) {
                             markedNames.add(targetDir.getName());
                             refreshPackages();
-                            exposeQueueToMtpDatabase();
                         } else {
                             bottomSummarySub.setText("Error al descomprimir " + zipFile.getName());
                         }

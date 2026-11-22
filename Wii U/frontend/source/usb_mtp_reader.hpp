@@ -112,8 +112,17 @@ public:
                 // GetPartialObject (0x101B) usa offset de 32 bits (archivos WUP .app en Wii U son <= 2 GB)
                 if (offset_ <= 0xFFFFFFFFULL && dev_->supportsPartial_) {
                     uint32_t chunkGot = 0;
-                    if (dev_->ReadPartialObject(handle_, static_cast<uint32_t>(offset_), want, out + got, chunkGot) &&
-                        chunkGot > 0) {
+                    bool readOk = false;
+                    for (int attempt = 0; attempt < 3 && !readOk; ++attempt) {
+                        if (attempt > 0) {
+                            dev_->RecoverEndpoints();
+                        }
+                        if (dev_->ReadPartialObject(handle_, static_cast<uint32_t>(offset_), want, out + got, chunkGot) &&
+                            chunkGot > 0) {
+                            readOk = true;
+                        }
+                    }
+                    if (readOk) {
                         offset_ += chunkGot;
                         remaining_ -= chunkGot;
                         got += chunkGot;
@@ -353,41 +362,84 @@ public:
         return false;
     }
 
+    void RecoverEndpoints() {
+        if (!uhsOpened_ || !ifAcquired_) return;
+        UhsClearEndpointHalt(&uhsHandle_, ifHandle_, epIn_, ENDPOINT_TRANSFER_IN);
+        UhsClearEndpointHalt(&uhsHandle_, ifHandle_, epOut_, ENDPOINT_TRANSFER_OUT);
+        OSSleepTicks(OSMillisecondsToTicks(25));
+    }
+
     bool ScanWupPackages(std::vector<MtpPkg>& outPkgs, std::string& outDiag) {
         outPkgs.clear();
         outDiag.clear();
         if (!connected_ || !sessionOpen_) {
-            outDiag = "Sesion MTP no activa.";
+            outDiag = "Sesion USB del celular no activa.";
             return false;
         }
 
         std::vector<uint32_t> storageIds;
         if (!GetStorageIds(storageIds) || storageIds.empty()) {
-            outDiag = "Movil bloqueado: desbloquea la pantalla y acepta MTP.";
+            outDiag = "Celular bloqueado: desbloquea la pantalla y elige 'Transferencia de archivos'.";
             return false;
         }
+
+        // Leer manifiesto automatico generado por la App Android (WiiU_Transfer/wiiu_queue.txt)
+        // para conocer la carpeta elegida por el usuario (ej. /Download o cualquier directorio)
+        // y los juegos ya seleccionados en el celular.
+        std::string customFolderRel;
+        std::vector<std::string> preMarkedNames;
+        bool hasQueueManifest = false;
 
         for (uint32_t sid : storageIds) {
             std::vector<MtpObjMeta> rootObjs;
             if (!ListDirectoryObjects(sid, 0xFFFFFFFFu, rootObjs)) continue;
 
-            // 1. Escanear carpetas en la raiz del almacenamiento del telefono
-            ScanCandidateContainer(sid, rootObjs, outPkgs);
+            // Buscar WiiU_Transfer/wiiu_queue.txt
+            for (const auto& ro : rootObjs) {
+                if (ro.isDir && usbfat::EqualsCI(ro.name, "WiiU_Transfer")) {
+                    std::vector<MtpObjMeta> wtObjs;
+                    if (ListDirectoryObjects(sid, ro.handle, wtObjs)) {
+                        for (const auto& f : wtObjs) {
+                            if (!f.isDir && usbfat::EqualsCI(f.name, "wiiu_queue.txt") &&
+                                f.size > 0 && f.size <= 64 * 1024) {
+                                std::vector<uint8_t> qData;
+                                if (ReadFullObject(f.handle, static_cast<uint32_t>(f.size), qData)) {
+                                    ParseQueueManifest(qData, customFolderRel, preMarkedNames);
+                                    hasQueueManifest = true;
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
 
-            // 2. Escanear dentro de carpetas habituales en Android:
-            //    /WiiU_Transfer, /WUP, /install, /packages, /Download
+            // 1. Si la App Android indico una carpeta especifica (ej. Download, Descargas o cualquier ruta),
+            //    escanearla primero con prioridad.
+            if (hasQueueManifest && !customFolderRel.empty()) {
+                uint32_t targetDirHandle = ResolveFolderByPath(sid, rootObjs, customFolderRel);
+                if (targetDirHandle != 0) {
+                    std::vector<MtpObjMeta> customObjs;
+                    if (ListDirectoryObjects(sid, targetDirHandle, customObjs)) {
+                        ScanCandidateContainer(sid, customObjs, outPkgs);
+                    }
+                }
+            }
+
+            // 2. Escanear carpetas habituales en Android (/Download, /Descargas, /WiiU_Transfer, /WUP, /install, /packages)
             for (const auto& ro : rootObjs) {
                 if (!ro.isDir) continue;
                 if (usbfat::EqualsCI(ro.name, "WiiU_Transfer") ||
+                    usbfat::EqualsCI(ro.name, "Download") ||
+                    usbfat::EqualsCI(ro.name, "Downloads") ||
+                    usbfat::EqualsCI(ro.name, "Descargas") ||
                     usbfat::EqualsCI(ro.name, "WUP") ||
                     usbfat::EqualsCI(ro.name, "install") ||
-                    usbfat::EqualsCI(ro.name, "packages") ||
-                    usbfat::EqualsCI(ro.name, "Download") ||
-                    usbfat::EqualsCI(ro.name, "Downloads")) {
+                    usbfat::EqualsCI(ro.name, "packages")) {
                     std::vector<MtpObjMeta> subObjs;
                     if (ListDirectoryObjects(sid, ro.handle, subObjs)) {
                         ScanCandidateContainer(sid, subObjs, outPkgs);
-                        // Si dentro de /Download hay /Download/WiiU_Transfer o /Download/WUP
                         for (const auto& so : subObjs) {
                             if (so.isDir && (usbfat::EqualsCI(so.name, "WiiU_Transfer") ||
                                              usbfat::EqualsCI(so.name, "WUP") ||
@@ -402,10 +454,25 @@ public:
                     }
                 }
             }
+
+            // 3. Escanear cualquier carpeta de juegos directamente en la raiz del almacenamiento
+            ScanCandidateContainer(sid, rootObjs, outPkgs);
+        }
+
+        // Aplicar seleccion automatica proveniente de la App Android
+        if (!preMarkedNames.empty()) {
+            for (auto& pkg : outPkgs) {
+                for (const auto& mn : preMarkedNames) {
+                    if (usbfat::EqualsCI(pkg.name, mn.c_str())) {
+                        pkg.marked = true;
+                        break;
+                    }
+                }
+            }
         }
 
         if (outPkgs.empty()) {
-            outDiag = "Sin carpetas WUP en /WiiU_Transfer, /Download o raiz.";
+            outDiag = "No se encontraron juegos en el celular (revisa /Download o tu carpeta elegida).";
         }
         return true;
     }
@@ -445,9 +512,13 @@ private:
                                  dmaBuf_, static_cast<int32_t>(len), timeoutMs));
     }
 
-    int32_t BulkIn(void* dst, uint32_t maxLen, int32_t timeoutMs = 8000) {
+    int32_t BulkIn(void* dst, uint32_t maxLen, int32_t timeoutMs = 10000) {
         if (!uhsOpened_ || !ifAcquired_) return -1;
-        uint32_t ask = std::min<uint32_t>(maxLen, kMtpDmaBufSize);
+        // En USB 2.0 High-Speed (EHCI/IOS-USB), las lecturas Bulk IN DEBEN ser multiplo de 512 B
+        // para evitar errores de Babble/Short-Transfer Overflow cuando el celular envia paquetes de 512 B
+        uint32_t aligned = (maxLen + 511u) & ~511u;
+        if (aligned < 512u) aligned = 512u;
+        uint32_t ask = std::min<uint32_t>(aligned, kMtpDmaBufSize);
         DCInvalidateRange(dmaBuf_, ask);
         int32_t r = static_cast<int32_t>(
             UhsSubmitBulkRequest(&uhsHandle_, ifHandle_, epIn_, ENDPOINT_TRANSFER_IN,
@@ -455,8 +526,18 @@ private:
         if (r > 0) {
             DCInvalidateRange(dmaBuf_, static_cast<uint32_t>(r));
             if (dst != dmaBuf_) {
-                std::memcpy(dst, dmaBuf_, static_cast<size_t>(r));
+                uint32_t copyLen = std::min<uint32_t>(static_cast<uint32_t>(r), maxLen);
+                std::memcpy(dst, dmaBuf_, static_cast<size_t>(copyLen));
             }
+        }
+        return r;
+    }
+
+    int32_t BulkInSkipZlp(uint32_t askLen, int32_t timeoutMs = 10000) {
+        int32_t r = BulkIn(dmaBuf_, askLen, timeoutMs);
+        if (r == 0) {
+            // Saltar Zero-Length Packet (ZLP) enviado por Android tras multiplos exactos de 512 B
+            r = BulkIn(dmaBuf_, askLen, timeoutMs);
         }
         return r;
     }
@@ -493,7 +574,7 @@ private:
         }
 
         // Leer siguiente contenedor (puede ser DATA o directamente RESPONSE)
-        int32_t n = BulkIn(dmaBuf_, kMtpDmaBufSize);
+        int32_t n = BulkInSkipZlp(kMtpDmaBufSize);
         if (n < 12) return false;
 
         uint32_t contLen  = usbfat::Rd32LE(dmaBuf_ + 0);
@@ -511,10 +592,10 @@ private:
         uint32_t totalDataBytes = (contLen > 12u && contLen != 0xFFFFFFFFu) ? (contLen - 12u) : 0u;
         uint32_t firstPayload = static_cast<uint32_t>(n - 12);
 
-        // Verificar si el paquete RESPONSE vino pegado al final de la misma lectura bulk
         uint32_t takeFirst = (totalDataBytes > 0) ? std::min<uint32_t>(firstPayload, totalDataBytes) : firstPayload;
         outPayload.insert(outPayload.end(), dmaBuf_ + 12, dmaBuf_ + 12 + takeFirst);
 
+        // Si el contenedor RESPONSE vino pegado al final del mismo paquete Bulk IN
         if (totalDataBytes > 0 && firstPayload >= totalDataBytes + 12u) {
             const uint8_t* respPtr = dmaBuf_ + 12 + totalDataBytes;
             if (usbfat::Rd16LE(respPtr + 4) == kMtpContResponse) {
@@ -523,15 +604,25 @@ private:
             }
         }
 
+        bool gotConcatResp = false;
         while (totalDataBytes > 0 && outPayload.size() < totalDataBytes) {
             uint32_t rem = totalDataBytes - static_cast<uint32_t>(outPayload.size());
-            int32_t rn = BulkIn(dmaBuf_, std::min<uint32_t>(rem, kMtpDmaBufSize));
+            int32_t rn = BulkIn(dmaBuf_, std::min<uint32_t>(((rem + 511u) & ~511u), kMtpDmaBufSize));
             if (rn <= 0) return false;
-            outPayload.insert(outPayload.end(), dmaBuf_, dmaBuf_ + rn);
+            uint32_t takeNow = std::min<uint32_t>(static_cast<uint32_t>(rn), rem);
+            outPayload.insert(outPayload.end(), dmaBuf_, dmaBuf_ + takeNow);
+            if (static_cast<uint32_t>(rn) >= takeNow + 12u &&
+                usbfat::Rd16LE(dmaBuf_ + takeNow + 4) == kMtpContResponse) {
+                outRespCode = usbfat::Rd16LE(dmaBuf_ + takeNow + 6);
+                gotConcatResp = true;
+                break;
+            }
         }
 
-        // Leer contenedor RESPONSE
-        int32_t respN = BulkIn(dmaBuf_, 512);
+        if (gotConcatResp) return true;
+
+        // Leer contenedor RESPONSE (saltando posible ZLP)
+        int32_t respN = BulkInSkipZlp(512);
         if (respN < 12) return false;
         if (usbfat::Rd16LE(dmaBuf_ + 4) != kMtpContResponse) return false;
         outRespCode = usbfat::Rd16LE(dmaBuf_ + 6);
@@ -557,7 +648,7 @@ private:
 
         if (BulkOut(cmdBuf, 24) < 24) return false;
 
-        int32_t n = BulkIn(dmaBuf_, kMtpDmaBufSize);
+        int32_t n = BulkInSkipZlp(kMtpDmaBufSize);
         if (n < 12) return false;
 
         uint32_t contLen  = usbfat::Rd32LE(dmaBuf_ + 0);
@@ -570,21 +661,37 @@ private:
         if (contType != kMtpContData || contLen < 12) return false;
 
         uint32_t expected = std::min<uint32_t>(contLen - 12u, maxBytes);
-        uint32_t firstCopy = std::min<uint32_t>(static_cast<uint32_t>(n - 12), expected);
+        uint32_t firstPayload = static_cast<uint32_t>(n - 12);
+        uint32_t firstCopy = std::min<uint32_t>(firstPayload, expected);
         std::memcpy(dst, dmaBuf_ + 12, firstCopy);
         outGot = firstCopy;
 
+        if (firstPayload >= expected + 12u &&
+            usbfat::Rd16LE(dmaBuf_ + 12 + expected + 4) == kMtpContResponse) {
+            return usbfat::Rd16LE(dmaBuf_ + 12 + expected + 6) == kMtpRespOk;
+        }
+
+        bool gotConcatResp = false;
+        uint16_t concatRespCode = 0;
         while (outGot < expected) {
             uint32_t rem = expected - outGot;
-            int32_t rn = BulkIn(dmaBuf_, std::min<uint32_t>(rem, kMtpDmaBufSize));
+            int32_t rn = BulkIn(dmaBuf_, std::min<uint32_t>(((rem + 511u) & ~511u), kMtpDmaBufSize));
             if (rn <= 0) return false;
             uint32_t copyNow = std::min<uint32_t>(static_cast<uint32_t>(rn), rem);
             std::memcpy(dst + outGot, dmaBuf_, copyNow);
             outGot += copyNow;
+            if (static_cast<uint32_t>(rn) >= copyNow + 12u &&
+                usbfat::Rd16LE(dmaBuf_ + copyNow + 4) == kMtpContResponse) {
+                concatRespCode = usbfat::Rd16LE(dmaBuf_ + copyNow + 6);
+                gotConcatResp = true;
+                break;
+            }
         }
 
-        // Recibir RESPONSE final
-        int32_t respN = BulkIn(dmaBuf_, 512);
+        if (gotConcatResp) return concatRespCode == kMtpRespOk;
+
+        // Recibir RESPONSE final (saltando posible ZLP si contLen fue multiplo exacto de 512 B)
+        int32_t respN = BulkInSkipZlp(512);
         if (respN < 12) return false;
         uint16_t rType = usbfat::Rd16LE(dmaBuf_ + 4);
         uint16_t rCode = usbfat::Rd16LE(dmaBuf_ + 6);
@@ -736,6 +843,63 @@ private:
         }
     }
 
+    static void ParseQueueManifest(const std::vector<uint8_t>& data,
+                                   std::string& outFolderRel,
+                                   std::vector<std::string>& outGames) {
+        std::string text(reinterpret_cast<const char*>(data.data()), data.size());
+        size_t pos = 0;
+        while (pos < text.size()) {
+            size_t nl = text.find('\n', pos);
+            if (nl == std::string::npos) nl = text.size();
+            std::string line = text.substr(pos, nl - pos);
+            while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t')) {
+                line.pop_back();
+            }
+            if (line.rfind("FOLDER=", 0) == 0) {
+                std::string f = line.substr(7);
+                while (!f.empty() && (f.front() == '/' || f.front() == '\\')) f.erase(f.begin());
+                while (!f.empty() && (f.back() == '/' || f.back() == '\\')) f.pop_back();
+                outFolderRel = f;
+            } else if (line.rfind("GAME=", 0) == 0) {
+                std::string g = line.substr(5);
+                if (!g.empty()) outGames.push_back(g);
+            }
+            pos = nl + 1;
+        }
+    }
+
+    uint32_t ResolveFolderByPath(uint32_t storageId,
+                                 const std::vector<MtpObjMeta>& rootObjs,
+                                 const std::string& relPath) {
+        if (relPath.empty()) return 0xFFFFFFFFu;
+        std::vector<MtpObjMeta> curObjs = rootObjs;
+        uint32_t curHandle = 0;
+        size_t pos = 0;
+        while (pos < relPath.size()) {
+            size_t slash = relPath.find('/', pos);
+            if (slash == std::string::npos) slash = relPath.size();
+            std::string seg = relPath.substr(pos, slash - pos);
+            pos = slash + 1;
+            if (seg.empty()) continue;
+
+            uint32_t found = 0;
+            for (const auto& o : curObjs) {
+                if (o.isDir && usbfat::EqualsCI(o.name, seg.c_str())) {
+                    found = o.handle;
+                    break;
+                }
+            }
+            if (found == 0) return 0;
+            curHandle = found;
+            if (pos < relPath.size()) {
+                std::vector<MtpObjMeta> nextObjs;
+                if (!ListDirectoryObjects(storageId, curHandle, nextObjs)) return 0;
+                curObjs = std::move(nextObjs);
+            }
+        }
+        return curHandle;
+    }
+
     void ScanCandidateContainer(uint32_t storageId,
                                 const std::vector<MtpObjMeta>& entries,
                                 std::vector<MtpPkg>& outPkgs) {
@@ -757,9 +921,18 @@ private:
                 usbfat::EqualsCI(e.name, "install") ||
                 usbfat::EqualsCI(e.name, "packages") ||
                 usbfat::EqualsCI(e.name, "Download") ||
-                usbfat::EqualsCI(e.name, "Downloads")) {
+                usbfat::EqualsCI(e.name, "Downloads") ||
+                usbfat::EqualsCI(e.name, "Descargas")) {
                 continue;
             }
+            bool alreadyAdded = false;
+            for (const auto& ex : outPkgs) {
+                if (usbfat::EqualsCI(ex.name, e.name.c_str())) {
+                    alreadyAdded = true;
+                    break;
+                }
+            }
+            if (alreadyAdded) continue;
 
             MtpPkg pkg;
             pkg.name = e.name;
