@@ -89,9 +89,8 @@ public:
         }
 
         void Close() {
-            if (opened_ && dev_ && dev_->IsConnected()) {
-                dev_->CloseRemoteFile();
-            }
+            // CMD_OPEN_FILE cierra automaticamente el archivo anterior en Android,
+            // evitando trafico extra innecesario entre archivos.
             opened_ = false;
             dev_ = nullptr;
             remaining_ = 0;
@@ -560,8 +559,11 @@ private:
         lastErr_.clear();
 
         if (12u + reqLen > kAoaDmaSize) return false;
+        uint16_t mySeq = ++seq_;
+        if (mySeq == 0) mySeq = ++seq_;
+
         Wr32LE(dmaBuf_ + 0, kMagicReq);
-        Wr32LE(dmaBuf_ + 4, cmd);
+        Wr32LE(dmaBuf_ + 4, (static_cast<uint32_t>(mySeq) << 16) | (cmd & 0xFFFFu));
         Wr32LE(dmaBuf_ + 8, reqLen);
         if (reqLen > 0 && reqPayload != nullptr) {
             std::memcpy(dmaBuf_ + 12, reqPayload, reqLen);
@@ -575,45 +577,59 @@ private:
             return false;
         }
 
-        int32_t n = BulkIn(kAoaDmaSize, timeoutMs);
-        if (n < 12) {
-            char b[64];
-            std::snprintf(b, sizeof(b), "AOA IN fallo (cmd=%u, n=%d)", cmd, n);
-            lastErr_ = b;
-            return false;
-        }
-
-        uint32_t magic = usbfat::Rd32LE(dmaBuf_ + 0);
-        uint32_t status = usbfat::Rd32LE(dmaBuf_ + 4);
-        uint32_t payLen = usbfat::Rd32LE(dmaBuf_ + 8);
-        if (magic != kMagicOk && magic != kMagicErr) {
-            char b[64];
-            std::snprintf(b, sizeof(b), "AOA magic invalido (0x%08X)", magic);
-            lastErr_ = b;
-            return false;
-        }
-        outStatus = (magic == kMagicOk) ? status : (status == 0 ? 1u : status);
-
-        if (payLen > 0) {
-            outResp.reserve(payLen);
-            uint32_t firstCopy = std::min<uint32_t>(static_cast<uint32_t>(n - 12), payLen);
-            outResp.insert(outResp.end(), dmaBuf_ + 12, dmaBuf_ + 12 + firstCopy);
-
-            while (outResp.size() < payLen) {
-                uint32_t rem = payLen - static_cast<uint32_t>(outResp.size());
-                int32_t rn = BulkIn(std::min<uint32_t>(((rem + 511u) & ~511u), kAoaDmaSize), timeoutMs);
-                if (rn <= 0) {
-                    char b[64];
-                    std::snprintf(b, sizeof(b), "AOA corte datos (%u/%u, rn=%d)",
-                                  static_cast<uint32_t>(outResp.size()), payLen, rn);
-                    lastErr_ = b;
-                    return false;
-                }
-                uint32_t take = std::min<uint32_t>(static_cast<uint32_t>(rn), rem);
-                outResp.insert(outResp.end(), dmaBuf_, dmaBuf_ + take);
+        for (int tries = 0; tries < 4; ++tries) {
+            int32_t n = BulkIn(kAoaDmaSize, timeoutMs);
+            if (n < 12) {
+                char b[64];
+                std::snprintf(b, sizeof(b), "AOA IN fallo (cmd=%u, n=%d)", cmd, n);
+                lastErr_ = b;
+                return false;
             }
+
+            uint32_t magic = usbfat::Rd32LE(dmaBuf_ + 0);
+            uint32_t statusField = usbfat::Rd32LE(dmaBuf_ + 4);
+            uint32_t payLen = usbfat::Rd32LE(dmaBuf_ + 8);
+            if (magic != kMagicOk && magic != kMagicErr) {
+                char b[64];
+                std::snprintf(b, sizeof(b), "AOA magic invalido (0x%08X)", magic);
+                lastErr_ = b;
+                return false;
+            }
+
+            uint16_t respSeq = static_cast<uint16_t>((statusField >> 16) & 0xFFFFu);
+            uint32_t status = statusField & 0xFFFFu;
+
+            outResp.clear();
+            if (payLen > 0) {
+                outResp.reserve(payLen);
+                uint32_t firstCopy = std::min<uint32_t>(static_cast<uint32_t>(n - 12), payLen);
+                outResp.insert(outResp.end(), dmaBuf_ + 12, dmaBuf_ + 12 + firstCopy);
+
+                while (outResp.size() < payLen) {
+                    uint32_t rem = payLen - static_cast<uint32_t>(outResp.size());
+                    int32_t rn = BulkIn(std::min<uint32_t>(((rem + 511u) & ~511u), kAoaDmaSize), timeoutMs);
+                    if (rn <= 0) {
+                        char b[64];
+                        std::snprintf(b, sizeof(b), "AOA corte datos (%u/%u, rn=%d)",
+                                      static_cast<uint32_t>(outResp.size()), payLen, rn);
+                        lastErr_ = b;
+                        return false;
+                    }
+                    uint32_t take = std::min<uint32_t>(static_cast<uint32_t>(rn), rem);
+                    outResp.insert(outResp.end(), dmaBuf_, dmaBuf_ + take);
+                }
+            }
+
+            // Si llego un paquete retrasado de un comando anterior, descartarlo y leer el nuestro
+            if (respSeq != 0 && respSeq != mySeq) {
+                continue;
+            }
+
+            outStatus = (magic == kMagicOk) ? status : (status == 0 ? 1u : status);
+            return true;
         }
-        return true;
+        lastErr_ = "AOA desincronizado";
+        return false;
     }
 
     bool PingDevice(std::string& outModel, int32_t timeoutMs = 1500) {
@@ -662,9 +678,12 @@ private:
         lastErr_.clear();
         if (want > kAoaChunkSize) want = kAoaChunkSize;
 
+        uint16_t mySeq = ++seq_;
+        if (mySeq == 0) mySeq = ++seq_;
+
         // Enviar CMD_READ_CHUNK (header 12 B + payload 12 B = 24 B)
         Wr32LE(dmaBuf_ + 0, kMagicReq);
-        Wr32LE(dmaBuf_ + 4, kCmdReadChunk);
+        Wr32LE(dmaBuf_ + 4, (static_cast<uint32_t>(mySeq) << 16) | (kCmdReadChunk & 0xFFFFu));
         Wr32LE(dmaBuf_ + 8, 12u);
         Wr64LE(dmaBuf_ + 12, offset);
         Wr32LE(dmaBuf_ + 20, want);
@@ -677,44 +696,62 @@ private:
             return false;
         }
 
-        int32_t n = BulkIn(kAoaDmaSize, 8000);
-        if (n < 12) {
-            char b[64];
-            std::snprintf(b, sizeof(b), "AOA READ IN fallo (%d)", n);
-            lastErr_ = b;
-            return false;
-        }
-
-        uint32_t magic = usbfat::Rd32LE(dmaBuf_ + 0);
-        uint32_t status = usbfat::Rd32LE(dmaBuf_ + 4);
-        uint32_t payLen = usbfat::Rd32LE(dmaBuf_ + 8);
-        if (magic != kMagicOk || status != 0 || payLen > want) {
-            char b[64];
-            std::snprintf(b, sizeof(b), "AOA READ err (0x%08X, st=%u, len=%u)", magic, status, payLen);
-            lastErr_ = b;
-            return false;
-        }
-
-        uint32_t firstCopy = std::min<uint32_t>(static_cast<uint32_t>(n - 12), payLen);
-        if (firstCopy > 0) {
-            std::memcpy(dst, dmaBuf_ + 12, firstCopy);
-        }
-        outGot = firstCopy;
-
-        while (outGot < payLen) {
-            uint32_t rem = payLen - outGot;
-            int32_t rn = BulkIn(std::min<uint32_t>(((rem + 511u) & ~511u), kAoaDmaSize), 8000);
-            if (rn <= 0) {
+        for (int tries = 0; tries < 4; ++tries) {
+            int32_t n = BulkIn(kAoaDmaSize, 8000);
+            if (n < 12) {
                 char b[64];
-                std::snprintf(b, sizeof(b), "AOA READ corte (%u/%u, rn=%d)", outGot, payLen, rn);
+                std::snprintf(b, sizeof(b), "AOA READ IN fallo (%d)", n);
                 lastErr_ = b;
                 return false;
             }
-            uint32_t take = std::min<uint32_t>(static_cast<uint32_t>(rn), rem);
-            std::memcpy(dst + outGot, dmaBuf_, take);
-            outGot += take;
+
+            uint32_t magic = usbfat::Rd32LE(dmaBuf_ + 0);
+            uint32_t statusField = usbfat::Rd32LE(dmaBuf_ + 4);
+            uint32_t payLen = usbfat::Rd32LE(dmaBuf_ + 8);
+            uint16_t respSeq = static_cast<uint16_t>((statusField >> 16) & 0xFFFFu);
+            uint32_t status = statusField & 0xFFFFu;
+
+            if (respSeq != 0 && respSeq != mySeq) {
+                // Descartar paquete viejo completo si hubiera resto
+                uint32_t drained = std::min<uint32_t>(static_cast<uint32_t>(n - 12), payLen);
+                while (drained < payLen) {
+                    int32_t rn = BulkIn(kAoaDmaSize, 2000);
+                    if (rn <= 0) break;
+                    drained += static_cast<uint32_t>(rn);
+                }
+                continue;
+            }
+
+            if (magic != kMagicOk || status != 0 || payLen > want) {
+                char b[64];
+                std::snprintf(b, sizeof(b), "AOA READ err (0x%08X, st=%u, len=%u)", magic, status, payLen);
+                lastErr_ = b;
+                return false;
+            }
+
+            uint32_t firstCopy = std::min<uint32_t>(static_cast<uint32_t>(n - 12), payLen);
+            if (firstCopy > 0) {
+                std::memcpy(dst, dmaBuf_ + 12, firstCopy);
+            }
+            outGot = firstCopy;
+
+            while (outGot < payLen) {
+                uint32_t rem = payLen - outGot;
+                int32_t rn = BulkIn(std::min<uint32_t>(((rem + 511u) & ~511u), kAoaDmaSize), 8000);
+                if (rn <= 0) {
+                    char b[64];
+                    std::snprintf(b, sizeof(b), "AOA READ corte (%u/%u, rn=%d)", outGot, payLen, rn);
+                    lastErr_ = b;
+                    return false;
+                }
+                uint32_t take = std::min<uint32_t>(static_cast<uint32_t>(rn), rem);
+                std::memcpy(dst + outGot, dmaBuf_, take);
+                outGot += take;
+            }
+            return true;
         }
-        return true;
+        lastErr_ = "AOA READ desincronizado";
+        return false;
     }
 
     UhsHandle uhsHandle_{};
@@ -731,6 +768,7 @@ private:
     uint32_t ifHandle_ = 0;
     uint8_t epIn_ = 0;
     uint8_t epOut_ = 0;
+    uint16_t seq_ = 1;
     std::string deviceName_;
     std::string lastErr_;
 };

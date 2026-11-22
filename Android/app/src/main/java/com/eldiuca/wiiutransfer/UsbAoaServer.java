@@ -262,7 +262,7 @@ public class UsbAoaServer {
 
         RandomAccessFile openRaf = null;
         long openRafSize = 0L;
-        byte[] txBuf = new byte[12 + MAX_CHUNK_DATA];
+        byte[] txBuf = new byte[12 + MAX_CHUNK_DATA + 2];
 
         try {
             while (!stopping.get() && connected.get()) {
@@ -292,7 +292,9 @@ public class UsbAoaServer {
                         continue;
                     }
 
-                    int cmd = rd32LE(accum, 4);
+                    int cmdField = rd32LE(accum, 4);
+                    int cmd = cmdField & 0xFFFF;
+                    int seq = (cmdField >>> 16) & 0xFFFF;
                     int payloadLen = rd32LE(accum, 8);
                     if (payloadLen < 0 || payloadLen > 16 * 1024) {
                         accumLen = 0;
@@ -312,13 +314,13 @@ public class UsbAoaServer {
                     }
                     accumLen -= consumed;
 
-                    // Procesar comando
+                    // Procesar comando (eco de seq en los 16 bits altos de status para sincronizacion exacta)
                     if (cmd == CMD_PING) {
                         String model = Build.MANUFACTURER + " " + Build.MODEL;
-                        sendFramedResponse(MAGIC_OK, 0, model.getBytes(StandardCharsets.UTF_8));
+                        sendFramedResponse(MAGIC_OK, (seq << 16), model.getBytes(StandardCharsets.UTF_8));
                     } else if (cmd == CMD_LIST_PKGS) {
                         byte[] manifest = buildPackagesManifest();
-                        sendFramedResponse(MAGIC_OK, 0, manifest);
+                        sendFramedResponse(MAGIC_OK, (seq << 16), manifest);
                     } else if (cmd == CMD_OPEN_FILE) {
                         if (openRaf != null) {
                             try { openRaf.close(); } catch (Exception ignored) {}
@@ -348,31 +350,31 @@ public class UsbAoaServer {
                                 }
                                 byte[] szBytes = new byte[8];
                                 wr64LE(szBytes, 0, openRafSize);
-                                sendFramedResponse(MAGIC_OK, 0, szBytes);
+                                sendFramedResponse(MAGIC_OK, (seq << 16), szBytes);
                             } catch (Exception openEx) {
                                 String emsg = "OpenErr: " + openEx.getClass().getSimpleName();
                                 if (listener != null) {
                                     listener.onTransferActivity(emsg, totalBytesSent.get());
                                 }
-                                sendFramedResponse(MAGIC_ERR, 2, emsg.getBytes(StandardCharsets.UTF_8));
+                                sendFramedResponse(MAGIC_ERR, (seq << 16) | 2, emsg.getBytes(StandardCharsets.UTF_8));
                             }
                         } else {
                             String emsg = "NoFile:" + label;
                             if (listener != null) {
                                 listener.onTransferActivity(emsg, totalBytesSent.get());
                             }
-                            sendFramedResponse(MAGIC_ERR, 1, emsg.getBytes(StandardCharsets.UTF_8));
+                            sendFramedResponse(MAGIC_ERR, (seq << 16) | 1, emsg.getBytes(StandardCharsets.UTF_8));
                         }
                     } else if (cmd == CMD_READ_CHUNK) {
                         if (openRaf == null || payloadLen < 12) {
-                            sendFramedResponse(MAGIC_ERR, 2, null);
+                            sendFramedResponse(MAGIC_ERR, (seq << 16) | 2, null);
                         } else {
                             long off = rd64LE(payload, 0);
                             int want = rd32LE(payload, 8);
                             if (want < 0) want = 0;
                             if (want > MAX_CHUNK_DATA) want = MAX_CHUNK_DATA;
                             if (off < 0 || off >= openRafSize) {
-                                sendFramedResponse(MAGIC_OK, 0, null);
+                                sendFramedResponse(MAGIC_OK, (seq << 16), null);
                             } else {
                                 if (openRaf.getFilePointer() != off) {
                                     openRaf.seek(off);
@@ -385,9 +387,13 @@ public class UsbAoaServer {
                                     got += r;
                                 }
                                 wr32LE(txBuf, 0, MAGIC_OK);
-                                wr32LE(txBuf, 4, 0);
+                                wr32LE(txBuf, 4, (seq << 16));
                                 wr32LE(txBuf, 8, got);
-                                writeRaw(txBuf, 0, 12 + got);
+                                int pktLen = 12 + got;
+                                if ((pktLen & 511) == 0) {
+                                    txBuf[pktLen++] = 0; // Evita multiplo exacto de 512 B (garantiza short packet en EHCI)
+                                }
+                                writeRaw(txBuf, 0, pktLen);
                                 long sent = totalBytesSent.addAndGet(got);
                                 if (listener != null && (sent % (256 * 1024) < got)) {
                                     listener.onTransferActivity(currentFile, sent);
@@ -400,9 +406,9 @@ public class UsbAoaServer {
                             openRaf = null;
                         }
                         currentFile = "";
-                        sendFramedResponse(MAGIC_OK, 0, null);
+                        sendFramedResponse(MAGIC_OK, (seq << 16), null);
                     } else {
-                        sendFramedResponse(MAGIC_ERR, 99, null);
+                        sendFramedResponse(MAGIC_ERR, (seq << 16) | 99, null);
                     }
                 }
             }
@@ -419,7 +425,9 @@ public class UsbAoaServer {
     private void sendFramedResponse(int magic, int status, byte[] payload) throws IOException {
         int len = (payload == null) ? 0 : payload.length;
         if (12 + len <= MAX_AOA_WRITE) {
-            byte[] pkt = new byte[12 + len];
+            int pktLen = 12 + len;
+            boolean pad = ((pktLen & 511) == 0);
+            byte[] pkt = new byte[pad ? (pktLen + 1) : pktLen];
             wr32LE(pkt, 0, magic);
             wr32LE(pkt, 4, status);
             wr32LE(pkt, 8, len);
@@ -440,7 +448,14 @@ public class UsbAoaServer {
         int off = 0;
         while (off < len) {
             int chunk = Math.min(MAX_CHUNK_DATA, len - off);
-            writeRaw(payload, off, chunk);
+            if ((chunk & 511) == 0 && off + chunk == len) {
+                // Evitar que el ultimo bloque sea multiplo exacto de 512 B
+                byte[] lastBuf = new byte[chunk + 1];
+                System.arraycopy(payload, off, lastBuf, 0, chunk);
+                writeRaw(lastBuf, 0, lastBuf.length);
+            } else {
+                writeRaw(payload, off, chunk);
+            }
             off += chunk;
         }
     }
