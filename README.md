@@ -22,6 +22,12 @@ Este proyecto es **software de código abierto bajo la licencia MIT**. Consulta 
   <img src="Imagenes/6_WiiU_Transfer_Tools_Android_MTP.png" alt="Wii U Transfer Tools para Android 9+" width="820">
 </p>
 
+## Descargar la versión 2.0.0
+
+* **Wii U (Aroma):** [WiiU_Transfer.wuhb](https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.0/WiiU_Transfer.wuhb) — listo para copiar en `sd:/wiiu/apps/WiiU_Transfer.wuhb`.
+* **PC (Windows 10/11):** [WiiU-Transfer-Tools-PC-v2.0.0.zip](https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.0/WiiU-Transfer-Tools-PC-v2.0.0.zip) — incluye el programa para PC y el instalador gráfico `Instalar_WiiU_Transfer_Tools.bat`.
+* **Android (Android 9.0 o superior):** [WiiU_Transfer_Tools_Android.apk](https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.0/WiiU_Transfer_Tools_Android.apk) — aplicación para transferir por cable USB o por Wi-Fi.
+
 ## Novedades de la Versión 2.0.0
 
 * **Soporte Multi-Formato para Memoria USB (`exFAT`, `FAT32`, `NTFS` y `FAT`)**:
