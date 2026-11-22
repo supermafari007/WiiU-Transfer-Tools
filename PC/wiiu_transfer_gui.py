@@ -205,6 +205,11 @@ class RoundedButton(tk.Canvas):
         fg: str = COL_TEXT,
         font: tuple = ("Segoe UI", 9),
     ) -> None:
+        try:
+            f_obj = tkfont.Font(font=font)
+            width = max(width, f_obj.measure(text) + 28)
+        except Exception:
+            pass
         super().__init__(
             parent,
             width=width,
@@ -334,8 +339,8 @@ class WiiUTransferApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title(f"Wii U Transfer Tools v{APP_VERSION} — Programa para PC (por El Diuca)")
-        self.root.geometry("1060x720")
-        self.root.minsize(940, 640)
+        self.root.geometry("1120x740")
+        self.root.minsize(1020, 660)
         self.root.configure(bg=COL_BG)
 
         apply_dark_titlebar(self.root)
@@ -467,20 +472,20 @@ class WiiUTransferApp:
         ).pack(anchor="w")
         tk.Label(
             title_box,
-            text=f"Envía e instala juegos desde tu PC a la Wii U  •  Ver. {APP_VERSION}  •  Por El Diuca",
+            text=f"Envía e instala juegos a tu Wii U  •  Ver. {APP_VERSION}  •  El Diuca",
             bg=COL_HEADER,
             fg="#A8D8EC",
             font=("Segoe UI", 9),
         ).pack(anchor="w", pady=(2, 0))
 
-        self.status_pill = StatusPill(header, width=230, height=34)
-        self.status_pill.pack(side="right", padx=(10, 20), pady=18)
+        self.status_pill = StatusPill(header, width=190, height=34)
+        self.status_pill.pack(side="right", padx=(8, 20), pady=18)
 
         self.btn_about = RoundedButton(
             header,
-            text="i  Acerca de / GitHub",
+            text="i  Acerca de",
             command=self._open_about_dialog,
-            width=158,
+            width=124,
             height=34,
             radius=17,
             bg_outer=COL_HEADER,
@@ -490,7 +495,7 @@ class WiiUTransferApp:
             fg="#A8D8EC",
             font=("Segoe UI", 9, "bold"),
         )
-        self.btn_about.pack(side="right", padx=(0, 6), pady=18)
+        self.btn_about.pack(side="right", padx=(8, 4), pady=18)
 
         tk.Frame(self.root, bg=COL_CYAN, height=2).pack(fill="x", side="top")
 
@@ -681,7 +686,7 @@ class WiiUTransferApp:
             border=COL_TIP_BD,
             radius=10,
             pad=10,
-            height=108,
+            height=116,
         )
         tip_card.pack(fill="x", pady=(10, 0))
         tip_card.pack_propagate(False)
@@ -703,7 +708,7 @@ class WiiUTransferApp:
         ).pack(anchor="nw")
 
         # 4. Estado y mensajes recientes
-        log_card = RoundedCard(main, bg_outer=COL_BG, fill=COL_CARD, radius=12, pad=12, height=140)
+        log_card = RoundedCard(main, bg_outer=COL_BG, fill=COL_CARD, radius=12, pad=12, height=154)
         log_card.pack(fill="x")
         log_card.pack_propagate(False)
 
@@ -823,7 +828,7 @@ class WiiUTransferApp:
                 self.btn_toggle.configure_style(
                     text="Detener Envío", fill=COL_RED, hover=COL_RED_HV, fg="#FFFFFF"
                 )
-                self.status_pill.set_status(f"Compartiendo con Wii U • {ip}", COL_GREEN, "#A7F3D0")
+                self.status_pill.set_status(f"Compartiendo • {ip}", COL_GREEN, "#A7F3D0")
             except OSError as exc:
                 self._enqueue_log("ERR", f"No se pudo compartir en red: {exc}")
 
@@ -949,7 +954,8 @@ class WiiUTransferApp:
     def _open_about_dialog(self) -> None:
         dlg = tk.Toplevel(self.root)
         dlg.title("Acerca de Wii U Transfer Tools")
-        dlg.geometry("580x450")
+        dlg.geometry("700x520")
+        dlg.minsize(680, 500)
         dlg.resizable(False, False)
         dlg.configure(bg=COL_BG)
         dlg.transient(self.root)
@@ -963,9 +969,9 @@ class WiiUTransferApp:
         # Header del diálogo
         hdr = tk.Frame(dlg, bg=COL_HEADER)
         hdr.pack(fill="x")
-        tk.Label(hdr, image=self._header_icon_tk, bg=COL_HEADER).pack(side="left", padx=(16, 10), pady=10)
+        tk.Label(hdr, image=self._header_icon_tk, bg=COL_HEADER).pack(side="left", padx=(18, 12), pady=12)
         h_txt = tk.Frame(hdr, bg=COL_HEADER)
-        h_txt.pack(side="left", pady=10)
+        h_txt.pack(side="left", pady=12)
         tk.Label(
             h_txt,
             text="Acerca de Wii U Transfer Tools",
@@ -983,29 +989,45 @@ class WiiUTransferApp:
         tk.Frame(dlg, bg=COL_CYAN, height=2).pack(fill="x")
 
         body = tk.Frame(dlg, bg=COL_BG)
-        body.pack(fill="both", expand=True, padx=18, pady=14)
+        body.pack(fill="both", expand=True, padx=20, pady=16)
 
         # Descripción breve
-        desc_card = RoundedCard(body, bg_outer=COL_BG, fill=COL_CARD, radius=10, pad=12, height=84)
-        desc_card.pack(fill="x", pady=(0, 10))
+        desc_card = RoundedCard(body, bg_outer=COL_BG, fill=COL_CARD, radius=10, pad=14, height=96)
+        desc_card.pack(fill="x", pady=(0, 12))
         desc_card.pack_propagate(False)
         tk.Label(
             desc_card.inner,
             text=(
-                "Herramienta gratuita de código abierto para enviar e instalar juegos de Wii U\n"
-                "directamente desde tu PC, Celular Android o Memoria USB (exFAT, FAT32, NTFS y FAT)\n"
+                "Herramienta gratuita de código abierto para enviar e instalar juegos de Wii U "
+                "directamente desde tu PC, Celular Android o Memoria USB (exFAT, FAT32, NTFS y FAT) "
                 "por Red Wi-Fi, adaptador LAN USB o cable USB, sin pasos técnicos."
             ),
             justify="left",
+            anchor="w",
+            wraplength=620,
             bg=COL_CARD,
             fg=COL_TEXT,
             font=("Segoe UI", 9),
-        ).pack(anchor="w")
+        ).pack(fill="x", anchor="w")
 
         # Enlace oficial a GitHub
-        gh_card = RoundedCard(body, bg_outer=COL_BG, fill=COL_CARD, radius=10, pad=12, height=74)
-        gh_card.pack(fill="x", pady=(0, 10))
+        gh_card = RoundedCard(body, bg_outer=COL_BG, fill=COL_CARD, radius=10, pad=14, height=80)
+        gh_card.pack(fill="x", pady=(0, 12))
         gh_card.pack_propagate(False)
+        RoundedButton(
+            gh_card.inner,
+            text="Abrir en GitHub",
+            command=lambda: webbrowser.open(GITHUB_REPO_URL),
+            width=148,
+            height=34,
+            radius=8,
+            bg_outer=COL_CARD,
+            fill=COL_BTN_BG,
+            hover=COL_BTN_HV,
+            border=COL_CYAN,
+            fg="#FFFFFF",
+            font=("Segoe UI", 9, "bold"),
+        ).pack(side="right", padx=(12, 0), pady=6)
         gh_left = tk.Frame(gh_card.inner, bg=COL_CARD)
         gh_left.pack(side="left", fill="x", expand=True)
         tk.Label(
@@ -1022,20 +1044,6 @@ class WiiUTransferApp:
             fg=COL_CYAN_HI,
             font=("Segoe UI", 9, "bold"),
         ).pack(anchor="w", pady=(2, 0))
-        RoundedButton(
-            gh_card.inner,
-            text="Abrir en GitHub",
-            command=lambda: webbrowser.open(GITHUB_REPO_URL),
-            width=136,
-            height=34,
-            radius=8,
-            bg_outer=COL_CARD,
-            fill=COL_BTN_BG,
-            hover=COL_BTN_HV,
-            border=COL_CYAN,
-            fg="#FFFFFF",
-            font=("Segoe UI", 9, "bold"),
-        ).pack(side="right", pady=6)
 
         # Centro de Actualizaciones (PC + Wii U .wuhb)
         upd_card = RoundedCard(
@@ -1044,10 +1052,10 @@ class WiiUTransferApp:
             fill=COL_CARD,
             border=COL_AMBER_BD if self._update_available else COL_GREEN,
             radius=10,
-            pad=12,
-            height=118,
+            pad=14,
+            height=144,
         )
-        upd_card.pack(fill="x", pady=(0, 12))
+        upd_card.pack(fill="x", pady=(0, 14))
         upd_card.pack_propagate(False)
 
         var_upd_status = tk.StringVar(
@@ -1060,19 +1068,25 @@ class WiiUTransferApp:
         lbl_upd = tk.Label(
             upd_card.inner,
             textvariable=var_upd_status,
+            justify="left",
+            anchor="w",
+            wraplength=620,
             bg=COL_CARD,
             fg=COL_AMBER_TX if self._update_available else COL_GREEN_HI,
             font=("Segoe UI", 9, "bold"),
         )
-        lbl_upd.pack(anchor="w", pady=(0, 4))
+        lbl_upd.pack(fill="x", anchor="w", pady=(0, 4))
 
         tk.Label(
             upd_card.inner,
             text="Puedes actualizar este programa de PC o descargar la última App para tu consola Wii U (.wuhb):",
+            justify="left",
+            anchor="w",
+            wraplength=620,
             bg=COL_CARD,
             fg=COL_MUTED,
             font=("Segoe UI", 8),
-        ).pack(anchor="w", pady=(0, 8))
+        ).pack(fill="x", anchor="w", pady=(0, 10))
 
         btn_row = tk.Frame(upd_card.inner, bg=COL_CARD)
         btn_row.pack(fill="x")
@@ -1081,8 +1095,8 @@ class WiiUTransferApp:
             btn_row,
             text="Actualizar Programa PC",
             command=lambda: self._self_update_pc_from_github(var_upd_status, lbl_upd),
-            width=182,
-            height=34,
+            width=192,
+            height=36,
             radius=8,
             bg_outer=COL_CARD,
             fill=COL_GREEN,
@@ -1096,8 +1110,8 @@ class WiiUTransferApp:
             btn_row,
             text="Descargar App Wii U (.wuhb)",
             command=lambda: self._download_wuhb_from_github(var_upd_status, lbl_upd),
-            width=204,
-            height=34,
+            width=228,
+            height=36,
             radius=8,
             bg_outer=COL_CARD,
             fill=COL_CYAN,
@@ -1111,8 +1125,8 @@ class WiiUTransferApp:
             btn_row,
             text="Comprobar",
             command=lambda: self._check_updates_async(notify_if_up_to_date=True),
-            width=110,
-            height=34,
+            width=116,
+            height=36,
             radius=8,
             bg_outer=COL_CARD,
             fill=COL_BTN_BG,
@@ -1126,8 +1140,8 @@ class WiiUTransferApp:
             body,
             text="Cerrar ventana",
             command=dlg.destroy,
-            width=140,
-            height=34,
+            width=144,
+            height=36,
             radius=8,
             bg_outer=COL_BG,
             fill=COL_BTN_BG,
