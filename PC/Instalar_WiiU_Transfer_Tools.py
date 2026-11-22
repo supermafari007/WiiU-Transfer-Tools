@@ -38,6 +38,22 @@ from wiiu_transfer_gui import (
 )
 
 UNINSTALL_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\WiiUTransferTools"
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def _silent_run(cmd: list[str]) -> subprocess.CompletedProcess:
+    si = None
+    if os.name == "nt":
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = 0
+    return subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        creationflags=NO_WINDOW,
+        startupinfo=si,
+    )
 
 
 def get_bundle_dir() -> Path:
@@ -77,10 +93,8 @@ def create_windows_shortcut(
         f"$s.Description = '{description}'; "
         "$s.Save()"
     )
-    res = subprocess.run(
-        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_script],
-        capture_output=True,
-        text=True,
+    res = _silent_run(
+        ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-Command", ps_script]
     )
     return res.returncode == 0 and lnk_path.exists()
 
@@ -116,7 +130,7 @@ def run_uninstall_flow() -> None:
     install_dir = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
 
     # Cerrar el programa si estuviera abierto
-    subprocess.run(["taskkill", "/F", "/IM", "WiiU_Transfer_Tools.exe"], capture_output=True)
+    _silent_run(["taskkill", "/F", "/IM", "WiiU_Transfer_Tools.exe"])
 
     # Eliminar accesos directos
     desktop_lnk = Path(os.environ.get("USERPROFILE", str(Path.home()))) / "Desktop" / "Wii U Transfer Tools.lnk"
@@ -195,8 +209,8 @@ class InstallerWizard:
         self.var_desktop = tk.BooleanVar(value=True)
         self.var_startmenu = tk.BooleanVar(value=True)
         self.var_firewall = tk.BooleanVar(value=True)
-        self.var_launch = tk.BooleanVar(value=True)
         self.var_status = tk.StringVar(value="Listo para instalar Wii U Transfer Tools en tu PC.")
+        self._installing = False
 
         self._build_ui()
 
@@ -251,7 +265,7 @@ class InstallerWizard:
         ).pack(side="left", fill="x", expand=True, ipady=5, padx=(0, 8))
         RoundedButton(drow, "Cambiar...", self._choose_dir, width=96, height=30).pack(side="right")
 
-        opt_card = RoundedCard(body, bg_outer=COL_BG, fill=COL_CARD, radius=10, pad=14, height=188)
+        opt_card = RoundedCard(body, bg_outer=COL_BG, fill=COL_CARD, radius=10, pad=14, height=160)
         opt_card.pack(fill="x", pady=(0, 12))
         opt_card.pack_propagate(False)
         tk.Label(
@@ -265,7 +279,6 @@ class InstallerWizard:
         self._add_checkbox(opt_card.inner, "Crear icono de acceso directo en el Escritorio", self.var_desktop)
         self._add_checkbox(opt_card.inner, "Agregar al Menú Inicio (con Desinstalador)", self.var_startmenu)
         self._add_checkbox(opt_card.inner, "Permitir conexión con la Wii U en el Firewall de Windows", self.var_firewall)
-        self._add_checkbox(opt_card.inner, "Abrir Wii U Transfer Tools al finalizar", self.var_launch)
 
         prog_card = RoundedCard(body, bg_outer=COL_BG, fill=COL_CARD, radius=10, pad=12, height=66)
         prog_card.pack(fill="x", pady=(0, 14))
@@ -318,6 +331,9 @@ class InstallerWizard:
         self.root.update_idletasks()
 
     def _run_install(self) -> None:
+        if self._installing:
+            return
+        self._installing = True
         dest = Path(self.var_install_dir.get().strip()).resolve()
         try:
             self._set_progress(0.15, "Preparando carpeta de instalación...")
@@ -325,8 +341,8 @@ class InstallerWizard:
             (dest / "packages").mkdir(parents=True, exist_ok=True)
             (dest / "assets").mkdir(parents=True, exist_ok=True)
 
-            # Cerrar instancia anterior si estuviera abierta
-            subprocess.run(["taskkill", "/F", "/IM", "WiiU_Transfer_Tools.exe"], capture_output=True)
+            # Cerrar instancia anterior si estuviera abierta (sin mostrar consola)
+            _silent_run(["taskkill", "/F", "/IM", "WiiU_Transfer_Tools.exe"])
 
             self._set_progress(0.35, "Instalando Wii U Transfer Tools...")
             embedded_app = self.bundle_dir / "payload" / "WiiU_Transfer_Tools.exe"
@@ -378,32 +394,34 @@ class InstallerWizard:
             if self.var_firewall.get():
                 self._set_progress(0.92, "Configurando Firewall de Windows...")
                 for proto, port in (("TCP", 7331), ("UDP", 7332)):
-                    subprocess.run(
+                    _silent_run(
                         [
                             "netsh", "advfirewall", "firewall", "add", "rule",
                             f"name=Wii U Transfer Tools ({proto} {port})",
                             "dir=in", "action=allow", f"protocol={proto}", f"localport={port}",
-                        ],
-                        capture_output=True,
+                        ]
                     )
 
             self._set_progress(1.0, "¡Instalación completada!")
             self.lbl_status.configure(fg=COL_GREEN_HI)
+            self.root.update()
 
-            if self.var_launch.get():
-                subprocess.Popen([str(installed_app)], cwd=str(dest))
-
-            messagebox.showinfo(
+            lanzar = messagebox.askyesno(
                 "Instalación completada",
                 f"Wii U Transfer Tools v{APP_VERSION} se instaló correctamente.\n\n"
-                "Ya puedes abrirlo desde el icono del Escritorio o Menú Inicio, y desinstalarlo "
-                "cuando quieras desde Aplicaciones instaladas de Windows.",
+                "Ya tienes el icono en el Escritorio y Menú Inicio, y puedes desinstalarlo "
+                "cuando quieras desde Aplicaciones instaladas de Windows.\n\n"
+                "¿Deseas abrir Wii U Transfer Tools ahora?",
+                parent=self.root,
             )
             self.root.destroy()
+            if lanzar:
+                subprocess.Popen([str(installed_app)], cwd=str(dest))
         except Exception as exc:
+            self._installing = False
             self.lbl_status.configure(fg="#FF5C6C")
             self.var_status.set(f"Error: {exc}")
-            messagebox.showerror("Error de instalación", str(exc))
+            messagebox.showerror("Error de instalación", str(exc), parent=self.root)
 
 
 def main() -> None:
