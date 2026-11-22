@@ -60,6 +60,7 @@ public class UsbAoaServer {
 
     private volatile File rootDir;
     private final Set<String> markedNames = new HashSet<String>();
+    private final List<File> indexedFiles = new ArrayList<File>();
     private final AtomicBoolean connected = new AtomicBoolean(false);
     private final AtomicBoolean stopping = new AtomicBoolean(false);
     private final AtomicLong totalBytesSent = new AtomicLong(0L);
@@ -323,20 +324,44 @@ public class UsbAoaServer {
                             try { openRaf.close(); } catch (Exception ignored) {}
                             openRaf = null;
                         }
-                        String rel = new String(payload, StandardCharsets.UTF_8).trim();
-                        File target = resolveSafeFile(rel);
-                        if (target != null && target.isFile()) {
-                            openRaf = new RandomAccessFile(target, "r");
-                            openRafSize = openRaf.length();
-                            currentFile = rel;
-                            if (listener != null) {
-                                listener.onTransferActivity(rel, totalBytesSent.get());
+                        File target = null;
+                        String label = "";
+                        if (payloadLen == 4) {
+                            int fileId = rd32LE(payload, 0);
+                            synchronized (indexedFiles) {
+                                if (fileId >= 0 && fileId < indexedFiles.size()) {
+                                    target = indexedFiles.get(fileId);
+                                    label = target.getName();
+                                }
                             }
-                            byte[] szBytes = new byte[8];
-                            wr64LE(szBytes, 0, openRafSize);
-                            sendFramedResponse(MAGIC_OK, 0, szBytes);
+                        } else if (payloadLen > 0) {
+                            label = new String(payload, StandardCharsets.UTF_8).trim();
+                            target = resolveSafeFile(label);
+                        }
+                        if (target != null && target.isFile()) {
+                            try {
+                                openRaf = new RandomAccessFile(target, "r");
+                                openRafSize = openRaf.length();
+                                currentFile = label;
+                                if (listener != null) {
+                                    listener.onTransferActivity(label, totalBytesSent.get());
+                                }
+                                byte[] szBytes = new byte[8];
+                                wr64LE(szBytes, 0, openRafSize);
+                                sendFramedResponse(MAGIC_OK, 0, szBytes);
+                            } catch (Exception openEx) {
+                                String emsg = "OpenErr: " + openEx.getClass().getSimpleName();
+                                if (listener != null) {
+                                    listener.onTransferActivity(emsg, totalBytesSent.get());
+                                }
+                                sendFramedResponse(MAGIC_ERR, 2, emsg.getBytes(StandardCharsets.UTF_8));
+                            }
                         } else {
-                            sendFramedResponse(MAGIC_ERR, 1, null);
+                            String emsg = "NoFile:" + label;
+                            if (listener != null) {
+                                listener.onTransferActivity(emsg, totalBytesSent.get());
+                            }
+                            sendFramedResponse(MAGIC_ERR, 1, emsg.getBytes(StandardCharsets.UTF_8));
                         }
                     } else if (cmd == CMD_READ_CHUNK) {
                         if (openRaf == null || payloadLen < 12) {
@@ -463,6 +488,7 @@ public class UsbAoaServer {
         });
 
         StringBuilder sb = new StringBuilder();
+        List<File> newIndex = new ArrayList<File>();
         for (File dir : children) {
             if (!dir.isDirectory() || dir.getName().startsWith(".")) continue;
             List<File> files = new ArrayList<File>();
@@ -480,12 +506,18 @@ public class UsbAoaServer {
 
             String basePrefix = dir.getAbsolutePath();
             for (File f : files) {
+                int fid = newIndex.size();
+                newIndex.add(f);
                 String full = f.getAbsolutePath();
                 String sub = full.startsWith(basePrefix) ? full.substring(basePrefix.length()) : f.getName();
                 sub = sub.replace('\\', '/');
                 while (sub.startsWith("/")) sub = sub.substring(1);
-                sb.append("F|").append(sub).append("|").append(f.length()).append("\n");
+                sb.append("F|").append(fid).append("|").append(sub).append("|").append(f.length()).append("\n");
             }
+        }
+        synchronized (indexedFiles) {
+            indexedFiles.clear();
+            indexedFiles.addAll(newIndex);
         }
         return sb.toString().getBytes(StandardCharsets.UTF_8);
     }

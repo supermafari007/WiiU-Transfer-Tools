@@ -38,6 +38,7 @@ constexpr uint32_t kAoaChunkSize = 12 * 1024; // 12 KB datos + 12 B header = 123
 constexpr int32_t  kAoaMaxProfs  = 32;
 
 struct AoaFile {
+    uint32_t fileId = 0;   // ID numerico indexado en la App Android (evita fallos de rutas/UTF-8)
     std::string subPath;   // Ruta relativa dentro del paquete (ej. "title.tmd")
     std::string fullRel;   // Ruta relativa dentro de activeFolder (ej. "MiJuego/title.tmd")
     uint64_t size = 0;
@@ -69,7 +70,7 @@ public:
         FileStream() = default;
         ~FileStream() { Close(); }
 
-        bool Open(UsbAoaDevice* dev, const std::string& fullRel, uint64_t expectedSize) {
+        bool Open(UsbAoaDevice* dev, uint32_t fileId, uint64_t expectedSize) {
             Close();
             dev_ = dev;
             offset_ = 0;
@@ -78,7 +79,7 @@ public:
             if (!dev_ || !dev_->IsConnected()) return false;
 
             uint64_t remoteSize = 0;
-            if (!dev_->OpenRemoteFile(fullRel, remoteSize)) {
+            if (!dev_->OpenRemoteFile(fileId, remoteSize)) {
                 return false;
             }
             size_ = (remoteSize > 0) ? remoteSize : expectedSize;
@@ -268,14 +269,16 @@ public:
                 outPkgs.push_back(std::move(pkg));
                 curPkg = &outPkgs.back();
             } else if (line[0] == 'F' && line[1] == '|' && curPkg != nullptr) {
-                // F|subPath|size
+                // F|fileId|subPath|size
                 std::istringstream ls(line.substr(2));
-                std::string sub, szStr;
+                std::string idStr, sub, szStr;
+                std::getline(ls, idStr, '|');
                 std::getline(ls, sub, '|');
                 std::getline(ls, szStr, '|');
                 if (sub.empty()) continue;
 
                 AoaFile f;
+                f.fileId = static_cast<uint32_t>(std::strtoul(idStr.c_str(), nullptr, 10));
                 f.subPath = sub;
                 f.fullRel = curPkg->name + "/" + sub;
                 f.size = std::strtoull(szStr.c_str(), nullptr, 10);
@@ -623,12 +626,23 @@ private:
         return true;
     }
 
-    bool OpenRemoteFile(const std::string& fullRel, uint64_t& outSize) {
+    bool OpenRemoteFile(uint32_t fileId, uint64_t& outSize) {
+        uint8_t idBuf[4]{};
+        Wr32LE(idBuf, fileId);
         std::vector<uint8_t> resp;
         uint32_t status = 0;
-        if (!ExchangeCommand(kCmdOpenFile, fullRel.data(), static_cast<uint32_t>(fullRel.size()),
-                             resp, status, 5000) ||
-            status != 0 || resp.size() < 8) {
+        if (!ExchangeCommand(kCmdOpenFile, idBuf, 4, resp, status, 5000)) {
+            return false;
+        }
+        if (status != 0 || resp.size() < 8) {
+            if (!resp.empty()) {
+                lastErr_.assign(reinterpret_cast<const char*>(resp.data()), resp.size());
+            } else {
+                char b[64];
+                std::snprintf(b, sizeof(b), "AOA OPEN st=%u len=%u (id=%u)",
+                              status, static_cast<uint32_t>(resp.size()), fileId);
+                lastErr_ = b;
+            }
             return false;
         }
         uint64_t lo = usbfat::Rd32LE(resp.data());

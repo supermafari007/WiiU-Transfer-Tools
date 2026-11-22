@@ -2148,7 +2148,7 @@ bool RunSinglePackageInstall(wutui::UiCanvas& ui,
         usbaoa::UsbAoaDevice::FileStream mtpStream;
         if (fromMtp) {
             streamSize = fileSize;
-            if (!mtpStream.Open(&st.mtpDev, mtpPkgCopy.files[fi].fullRel, fileSize)) {
+            if (!mtpStream.Open(&st.mtpDev, mtpPkgCopy.files[fi].fileId, fileSize)) {
                 ok = false;
                 wctx.cancelRequested = true;
                 st.statusLine = "Error abriendo archivo en el Celular.";
@@ -2347,11 +2347,15 @@ bool RunSinglePackageInstall(wutui::UiCanvas& ui,
         ok = RunMcpInstallPhase(ui, st, input, stageMcpDir, 0.66f, 0.34f, lastDrawTicks, outCancelled);
     }
 
+    std::string savedErrSub = ok ? "" : st.subStatusLine;
     st.subStatusLine = "Limpiando archivos temporales...";
     PresentDoubleBuffered(ui, st);
     if (useFsa) FsaRemoveDirRecursive(st.fsaHandle, stageFsDir);
     else RemoveDirRecursive(stageFsDir);
     UpdateAllFreeSpace(st);
+    if (!ok && !savedErrSub.empty()) {
+        st.subStatusLine = savedErrSub;
+    }
 
     return ok;
 }
