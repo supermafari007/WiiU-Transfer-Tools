@@ -6,13 +6,13 @@
 
 Desarrollado por **El Diuca**.
 
-**Versión 2.0.0** — Aplicación para consola Wii U (`.wuhb`), Aplicación para Android 9+ (`.apk`) y Programa para PC Windows con Instalador Gráfico.
+**Versión 2.0.1** — Aplicación para consola Wii U (`.wuhb`), Aplicación para Android 9+ (`.apk`) y Programa para PC Windows con Instalador Gráfico.
 
 **Wii U Transfer Tools** permite transferir e instalar juegos de Wii U en consolas con Aroma utilizando **lenguaje 100% simple** y sin pasos técnicos, ya sea desde una **Memoria USB (`exFAT`, `FAT32`, `NTFS` o `FAT`)**, desde tu **Celular Android** (por cable USB o por Wi-Fi) o desde tu **PC con Windows** (por Wi-Fi o adaptador de red LAN USB).
 
 Este proyecto es **software de código abierto bajo la licencia MIT**. Consulta [LICENSE](LICENSE) para conocer los términos de uso, modificación y redistribución.
 
-## Así se ve Wii U Transfer Tools (Ver. 2.0.0)
+## Así se ve Wii U Transfer Tools (Ver. 2.0.1)
 
 | En la consola Wii U (`Modo USB` / `Modo Red`) | Programa de PC + Instalador para Windows |
 |:---:|:---:|
@@ -22,11 +22,17 @@ Este proyecto es **software de código abierto bajo la licencia MIT**. Consulta 
   <img src="Imagenes/6_WiiU_Transfer_Tools_Android_MTP.png" alt="Wii U Transfer Tools para Android 9+" width="820">
 </p>
 
-## Descargar la versión 2.0.0
+## Descargar la versión 2.0.1
 
-* **Wii U (Aroma):** [WiiU_Transfer.wuhb](https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.0/WiiU_Transfer.wuhb) — listo para copiar en `sd:/wiiu/apps/WiiU_Transfer.wuhb`.
-* **PC (Windows 10/11):** [WiiU-Transfer-Tools-PC-v2.0.0.zip](https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.0/WiiU-Transfer-Tools-PC-v2.0.0.zip) — incluye el programa para PC y el instalador gráfico `Instalar_WiiU_Transfer_Tools.bat`.
-* **Android (Android 9.0 o superior):** [WiiU_Transfer_Tools_Android.apk](https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.0/WiiU_Transfer_Tools_Android.apk) — aplicación para transferir por cable USB o por Wi-Fi.
+* **Wii U (Aroma):** [WiiU_Transfer.wuhb](https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.1/WiiU_Transfer.wuhb) — listo para copiar en `sd:/wiiu/apps/WiiU_Transfer.wuhb`.
+* **PC (Windows 10/11):** [WiiU-Transfer-Tools-PC-v2.0.1.zip](https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.1/WiiU-Transfer-Tools-PC-v2.0.1.zip) — incluye el programa para PC y el instalador gráfico `Instalar_WiiU_Transfer_Tools.bat`.
+* **Android (Android 9.0 o superior):** [WiiU_Transfer_Tools_Android.apk](https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.1/WiiU_Transfer_Tools_Android.apk) — aplicación para transferir por cable USB o por Wi-Fi.
+
+## Novedades de la Versión 2.0.1
+
+* **Corrección crítica de conexión USB con Android (`nsysuhs` MTP):** Corregido el direccionamiento de endpoints de 4 bits en `UhsSubmitBulkRequest`, tamaño DMA seguro de 64 KB (respaldo 16 KB) y escaneo de los 3 controladores USB con hasta 32 interfaces para teléfonos compuestos (Motorola, Samsung, Xiaomi, etc.).
+* **Aceleración real del Modo Red (Wi-Fi y LAN USB):** Espera real de inicialización `SOMEMOPT_REQUEST_WAIT_FOR_INIT` (pool de 2 MB), recepción TCP sin sobrecarga por paquete y `WifiLock` de baja latencia + `WakeLock` en Android.
+* **Inicio instantáneo con sonido:** El audio *"Pantalla Inicio"* suena al instante durante la pantalla de carga y, en cuanto termina de inicializar, entra directo a la interfaz principal sin esperar botón e inicia automáticamente el *"Tema de Fondo"*.
 
 ## Novedades de la Versión 2.0.0
 
