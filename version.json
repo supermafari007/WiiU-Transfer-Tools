@@ -5,7 +5,6 @@
   "release_url": "https://github.com/supermafari007/WiiU-Transfer-Tools/releases/tag/v2.0.2",
   "wiiu_wuhb_url": "https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.2/WiiU_Transfer.wuhb",
   "android_apk_url": "https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.2/WiiU_Transfer_Tools_Android.apk",
-  "pc_zip_url": "https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.2/WiiU-Transfer-Tools-PC-v2.0.2.zip",
-  "pc_gui_url": "https://raw.githubusercontent.com/supermafari007/WiiU-Transfer-Tools/main/PC/wiiu_transfer_gui.py",
-  "notes": "Ver. 2.0.2: Programa PC migrado a Microsoft Edge WebView2, USB Android MTP estable (lecturas alineadas 512B + ZLP + sincronizacion automatica de carpeta/seleccion sin boton extra), indicador Cable Listo real, instalador automatico de APK en Android, sin sonido de Pantalla Inicio y encabezado Wii U corregido."
+  "pc_setup_url": "https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.2/WiiU_Transfer_Tools_Setup_v2.0.2.exe",
+  "notes": "Ver. 2.0.2: Instalador unico .EXE para Windows con desinstalador integrado (sin Python ni ZIPs), USB Android MTP estable (512B/ZLP + sincronizacion automatica), Cable Listo real, instalador automatico de APK en Android, sin sonido Pantalla Inicio y encabezado Wii U corregido."
 }

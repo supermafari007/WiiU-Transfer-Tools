@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """
-Wii U Transfer Tools v2.0.2 - Aplicación de Escritorio para Windows (Microsoft Edge WebView2)
-Desarrollado por El Diuca.
-Interfaz moderna nativa en WebView2 con servidor NFSA integrado, progreso en vivo por juego,
-auto-actualizador conectado a GitHub y descarga directa de WiiU_Transfer.wuhb.
+Wii U Transfer Tools v2.0.0 - Interfaz Gráfica para PC (Tkinter + Pillow)
+Lenguaje 100% simple, barra de progreso de envío en vivo, verificador automático de
+actualizaciones en GitHub y ventana modal "Acerca de Wii U Transfer Tools".
 """
 
-import base64
+import ctypes
 import json
 import os
 import queue
@@ -14,11 +13,14 @@ import subprocess
 import sys
 import threading
 import time
+import tkinter as tk
 import urllib.request
 import webbrowser
 from pathlib import Path
+from tkinter import filedialog, messagebox, ttk
+from tkinter import font as tkfont
 
-import webview
+from PIL import Image, ImageTk
 
 from transfer_server import (
     TCP_PORT,
@@ -28,13 +30,53 @@ from transfer_server import (
     get_local_ip,
     scan_packages,
 )
-from ui_assets import ensure_pc_assets
+from ui_assets import ensure_pc_assets, make_rounded_corners_9slice, make_rounded_rect_img
 
 APP_VERSION = "2.0.2"
 GITHUB_REPO_URL = "https://github.com/supermafari007/WiiU-Transfer-Tools"
 VERSION_JSON_URL = "https://raw.githubusercontent.com/supermafari007/WiiU-Transfer-Tools/main/version.json"
 RAW_PC_BASE_URL = "https://raw.githubusercontent.com/supermafari007/WiiU-Transfer-Tools/main/PC"
 DEFAULT_WUHB_URL = "https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.2/WiiU_Transfer.wuhb"
+DEFAULT_PC_SETUP_URL = "https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.2/WiiU_Transfer_Tools_Setup_v2.0.2.exe"
+
+# Habilitar nitidez HiDPI en Windows
+if sys.platform.startswith("win"):
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)
+    except Exception:
+        pass
+
+# Paleta oscura oficial Wii U Transfer Tools (por El Diuca)
+COL_BG        = "#0F141B"
+COL_HEADER    = "#0B3954"
+COL_CARD      = "#18202B"
+COL_CARD_SOFT = "#121922"
+COL_TIP_BG    = "#112838"
+COL_TIP_BD    = "#1E4B66"
+COL_BORDER    = "#2E3D50"
+COL_CYAN      = "#00AEEF"
+COL_CYAN_DK   = "#0086B8"
+COL_CYAN_HI   = "#4DD4FF"
+COL_GREEN     = "#17A95B"
+COL_GREEN_HV  = "#138A49"
+COL_GREEN_HI  = "#2FE082"
+COL_RED       = "#D92B3A"
+COL_RED_HV    = "#B51F2C"
+COL_AMBER_BG  = "#3B280B"
+COL_AMBER_BD  = "#F59E0B"
+COL_AMBER_TX  = "#FCD34D"
+COL_BTN_BG    = "#253141"
+COL_BTN_HV    = "#314156"
+COL_BTN_BD    = "#3A4D66"
+COL_TEXT      = "#ECF3F9"
+COL_MUTED     = "#8EA3B8"
+COL_PILL_OFF  = "#072638"
+COL_TRACK     = "#273445"
+
+
+def hex_to_rgba(hex_color: str, alpha: int = 255) -> tuple[int, int, int, int]:
+    h = hex_color.lstrip("#")
+    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16), alpha)
 
 
 def open_in_explorer(path: Path) -> None:
@@ -59,627 +101,259 @@ def is_version_newer(current_ver: str, remote_ver: str) -> bool:
         return False
 
 
-HTML_UI = r"""<!DOCTYPE html>
-<html lang="es">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Wii U Transfer Tools</title>
-<style>
-  :root {
-    --bg: #0f141b;
-    --header: #0b3954;
-    --card: #18202b;
-    --card-soft: #121922;
-    --border: #2e3d50;
-    --cyan: #00aeef;
-    --cyan-dk: #0086b8;
-    --cyan-hi: #4dd4ff;
-    --cyan-sub: #a8d8ec;
-    --green: #17a95b;
-    --green-hi: #2fe082;
-    --red: #d92b3a;
-    --amber-bg: #3b280b;
-    --amber-bd: #f59e0b;
-    --amber-tx: #fcd34d;
-    --text: #ecf3f9;
-    --muted: #8ea3b8;
-    --btn: #253141;
-    --btn-hv: #314156;
-    --track: #273445;
-  }
-  * { box-sizing: border-box; user-select: none; }
-  body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--text);
-    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
-    display: flex;
-    flex-direction: column;
-    height: 100vh;
-    overflow: hidden;
-  }
-  header {
-    background: var(--header);
-    border-bottom: 2px solid var(--cyan);
-    padding: 12px 20px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 14px;
-    flex-shrink: 0;
-  }
-  .brand { display: flex; align-items: center; gap: 14px; }
-  .brand img { width: 52px; height: 40px; object-fit: contain; }
-  .brand h1 { margin: 0; font-size: 20px; font-weight: 700; color: #fff; letter-spacing: 0.2px; }
-  .brand p { margin: 2px 0 0; font-size: 12px; color: var(--cyan-sub); }
-  .header-actions { display: flex; align-items: center; gap: 10px; }
-  .btn-pill {
-    background: #072638;
-    border: 1px solid var(--cyan);
-    color: var(--cyan-sub);
-    border-radius: 999px;
-    padding: 7px 14px;
-    font-size: 12.5px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.15s ease;
-  }
-  .btn-pill:hover { background: #0f3b54; color: #fff; }
-  .status-pill {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    background: #072638;
-    color: #fff;
-    border-radius: 999px;
-    padding: 7px 16px;
-    font-size: 12.5px;
-    font-weight: 700;
-    transition: background 0.2s ease;
-  }
-  .status-pill.online { background: var(--green); }
-  .status-dot {
-    width: 9px; height: 9px; border-radius: 50%;
-    background: #8ea3b8;
-  }
-  .status-pill.online .status-dot {
-    background: #b4ffd2;
-    box-shadow: 0 0 8px #b4ffd2;
-  }
-  #updateBanner {
-    display: none;
-    background: var(--amber-bg);
-    border-bottom: 1px solid var(--amber-bd);
-    padding: 8px 20px;
-    align-items: center;
-    justify-content: space-between;
-    font-size: 13px;
-    color: var(--amber-tx);
-    font-weight: 600;
-  }
-  #updateBanner.show { display: flex; }
-  .btn-amber {
-    background: var(--amber-bd);
-    color: #111827;
-    border: none;
-    border-radius: 8px;
-    padding: 6px 14px;
-    font-weight: 700;
-    font-size: 12px;
-    cursor: pointer;
-  }
-  main {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    padding: 14px 18px;
-    min-height: 0;
-  }
-  .card {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    padding: 12px 14px;
-  }
-  .toolbar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-shrink: 0;
-  }
-  .toolbar label { font-size: 13px; font-weight: 600; white-space: nowrap; }
-  .folder-input {
-    flex: 1;
-    background: var(--card-soft);
-    border: 1px solid var(--border);
-    color: var(--text);
-    border-radius: 8px;
-    padding: 8px 10px;
-    font-size: 12.5px;
-    outline: none;
-  }
-  .btn {
-    background: var(--btn);
-    border: 1px solid #3a4d66;
-    color: var(--text);
-    border-radius: 8px;
-    padding: 8px 13px;
-    font-size: 12.5px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: background 0.15s ease, transform 0.08s ease;
-    white-space: nowrap;
-  }
-  .btn:hover { background: var(--btn-hv); }
-  .btn:active { transform: scale(0.98); }
-  .btn-primary {
-    background: var(--cyan);
-    border-color: var(--cyan);
-    color: #fff;
-    padding: 8px 18px;
-    font-weight: 700;
-  }
-  .btn-primary:hover { background: var(--cyan-dk); }
-  .btn-danger {
-    background: var(--red);
-    border-color: var(--red);
-    color: #fff;
-    padding: 8px 18px;
-    font-weight: 700;
-  }
-  .btn-danger:hover { background: #b51f2c; }
-  .btn-green {
-    background: var(--green);
-    border-color: var(--green);
-    color: #fff;
-    font-weight: 700;
-  }
-  .btn-green:hover { background: #138a49; }
-
-  .grid {
-    flex: 1;
-    display: grid;
-    grid-template-columns: 1.65fr 1fr;
-    gap: 12px;
-    min-height: 0;
-  }
-  .panel {
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-  }
-  .panel-hdr {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 10px;
-  }
-  .panel-hdr h2 { margin: 0; font-size: 15px; font-weight: 700; }
-  .panel-hdr span { font-size: 11.5px; color: var(--muted); }
-
-  .table-wrap {
-    flex: 1;
-    overflow-y: auto;
-    background: var(--card-soft);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-  }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th {
-    position: sticky; top: 0;
-    background: #202b3a;
-    color: var(--text);
-    text-align: left;
-    padding: 9px 12px;
-    font-size: 12px;
-    font-weight: 700;
-    border-bottom: 1px solid var(--border);
-  }
-  th.right, td.right { text-align: right; }
-  th.center, td.center { text-align: center; }
-  td {
-    padding: 9px 12px;
-    border-bottom: 1px solid #1e2938;
-  }
-  tbody tr { cursor: pointer; transition: background 0.12s; }
-  tbody tr:hover { background: #162636; }
-  .badge {
-    display: inline-block;
-    padding: 3px 10px;
-    border-radius: 999px;
-    font-size: 11.5px;
-    font-weight: 700;
-  }
-  .badge-ready { background: #1b2a3b; color: var(--cyan-sub); }
-  .badge-sending { background: #0d3a52; color: var(--cyan-hi); border: 1px solid var(--cyan); }
-  .badge-done { background: #103a24; color: var(--green-hi); border: 1px solid var(--green); }
-  .empty-state {
-    padding: 38px 20px;
-    text-align: center;
-    color: var(--muted);
-    font-size: 13px;
-    line-height: 1.6;
-  }
-
-  .stat-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 5px 0;
-    font-size: 13px;
-  }
-  .stat-row .k { color: var(--muted); }
-  .stat-row .v { font-weight: 700; }
-  .v-green { color: var(--green-hi); }
-  .v-cyan { color: var(--cyan-hi); }
-
-  .prog-box {
-    margin: 8px 0;
-    background: var(--card-soft);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 10px;
-  }
-  .prog-track {
-    width: 100%;
-    height: 12px;
-    background: var(--track);
-    border-radius: 999px;
-    overflow: hidden;
-  }
-  .prog-fill {
-    height: 100%;
-    width: 0%;
-    background: linear-gradient(90deg, var(--cyan), var(--cyan-hi));
-    border-radius: 999px;
-    transition: width 0.25s ease;
-  }
-  .prog-text {
-    margin-top: 6px;
-    font-size: 11.5px;
-    color: var(--cyan-sub);
-    font-weight: 600;
-  }
-  .guide-box {
-    margin-top: auto;
-    background: #112838;
-    border: 1px solid #1e4b66;
-    border-radius: 10px;
-    padding: 11px 12px;
-    font-size: 12.5px;
-    line-height: 1.55;
-  }
-  .guide-box strong { color: var(--cyan-hi); display: block; margin-bottom: 4px; }
-
-  .log-card {
-    height: 124px;
-    flex-shrink: 0;
-    display: flex;
-    flex-direction: column;
-  }
-  .log-card h3 { margin: 0 0 6px; font-size: 13px; font-weight: 700; }
-  .log-body {
-    flex: 1;
-    overflow-y: auto;
-    background: var(--card-soft);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 7px 10px;
-    font-family: Consolas, "Cascadia Mono", monospace;
-    font-size: 11.5px;
-    line-height: 1.45;
-    user-select: text;
-  }
-  .log-INFO { color: var(--text); }
-  .log-OK { color: var(--green-hi); }
-  .log-WARN { color: #f5b041; }
-  .log-ERR { color: #ff5c6c; }
-
-  /* Modal Acerca de */
-  .modal-backdrop {
-    position: fixed; inset: 0;
-    background: rgba(5, 10, 16, 0.72);
-    display: none;
-    align-items: center;
-    justify-content: center;
-    z-index: 99;
-  }
-  .modal-backdrop.open { display: flex; }
-  .modal {
-    width: 560px;
-    background: var(--card);
-    border: 2px solid var(--cyan);
-    border-radius: 16px;
-    overflow: hidden;
-    box-shadow: 0 20px 50px rgba(0,0,0,0.6);
-  }
-  .modal-hdr {
-    background: var(--header);
-    padding: 14px 18px;
-    border-bottom: 2px solid var(--cyan);
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-  .modal-hdr img { width: 42px; height: 32px; }
-  .modal-hdr h3 { margin: 0; font-size: 16px; color: #fff; }
-  .modal-hdr small { color: var(--cyan-sub); font-size: 12px; }
-  .modal-body { padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; font-size: 13px; }
-  .sub-card {
-    background: var(--card-soft);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 12px;
-  }
-  .gh-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-  .upd-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
-  .modal-footer { padding: 0 18px 16px; display: flex; justify-content: flex-end; }
-</style>
-</head>
-<body>
-  <header>
-    <div class="brand">
-      <img id="hdrIcon" src="" alt="Wii U">
-      <div>
-        <h1>Wii U Transfer Tools</h1>
-        <p id="hdrSub">Envía e instala juegos desde tu PC a la Wii U • Ver. 2.0.2 • Por El Diuca</p>
-      </div>
-    </div>
-    <div class="header-actions">
-      <button class="btn-pill" onclick="openAbout()">i &nbsp;Acerca de / GitHub</button>
-      <div id="statusPill" class="status-pill">
-        <span class="status-dot"></span>
-        <span id="statusText">En espera</span>
-      </div>
-    </div>
-  </header>
-
-  <div id="updateBanner">
-    <span id="updateBannerText">¡Nueva versión disponible en GitHub!</span>
-    <button class="btn-amber" onclick="openAbout()">Actualizar ahora</button>
-  </div>
-
-  <main>
-    <div class="card toolbar">
-      <label>Carpeta de juegos:</label>
-      <input id="folderInput" class="folder-input" readonly value="">
-      <button class="btn" onclick="chooseFolder()">Cambiar carpeta...</button>
-      <button class="btn" onclick="refreshPackages()">Actualizar</button>
-      <button class="btn" onclick="openFolder()">Abrir carpeta</button>
-      <button id="btnToggle" class="btn btn-primary" onclick="toggleServer()">Compartir Juegos</button>
-    </div>
-
-    <div class="grid">
-      <div class="card panel">
-        <div class="panel-hdr">
-          <h2 id="pkgCountTitle">Juegos en tu PC (0)</h2>
-          <span>Doble clic para abrir la carpeta del juego</span>
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Nombre del Juego</th>
-                <th class="right" style="width:110px;">Tamaño</th>
-                <th class="center" style="width:175px;">Estado</th>
-              </tr>
-            </thead>
-            <tbody id="pkgBody"></tbody>
-          </table>
-        </div>
-      </div>
-
-      <div class="card panel">
-        <div class="panel-hdr">
-          <h2>Conexión con tu Wii U</h2>
-        </div>
-        <div class="stat-row"><span class="k">Consola Wii U:</span><span id="stClient" class="v v-green">Esperando conexión...</span></div>
-        <div class="stat-row"><span class="k">Enviando ahora:</span><span id="stGame" class="v v-cyan">Ninguno</span></div>
-
-        <div class="prog-box">
-          <div class="prog-track"><div id="progFill" class="prog-fill"></div></div>
-          <div id="progDetail" class="prog-text">Enviado total: 0 B</div>
-        </div>
-
-        <div class="stat-row"><span class="k">Velocidad:</span><span id="stSpeed" class="v v-green">0.00 MB/s</span></div>
-        <div class="stat-row"><span class="k">Red de este PC:</span><span id="stIp" class="v">Detectando...</span></div>
-
-        <div class="guide-box">
-          <strong>¿Cómo instalar en tu Wii U?</strong>
-          1. Abre <b>Wii U Transfer Tools</b> en tu consola<br>
-          2. Elige arriba <b>Modo Red</b> con el botón <b>[X]</b><br>
-          3. Pulsa <b>[Y]</b> para buscar y <b>[A]</b> para instalar
-        </div>
-      </div>
-    </div>
-
-    <div class="card log-card">
-      <h3>Estado y mensajes recientes</h3>
-      <div id="logBox" class="log-body"></div>
-    </div>
-  </main>
-
-  <div id="aboutModal" class="modal-backdrop" onclick="if(event.target===this) closeAbout()">
-    <div class="modal">
-      <div class="modal-hdr">
-        <img id="modalIcon" src="" alt="Wii U">
-        <div>
-          <h3>Acerca de Wii U Transfer Tools</h3>
-          <small id="modalVer">Versión 2.0.2 • Desarrollado por El Diuca (WebView2)</small>
-        </div>
-      </div>
-      <div class="modal-body">
-        <div class="sub-card" style="line-height:1.55;">
-          Herramienta gratuita de código abierto para enviar e instalar juegos de Wii U directamente desde tu
-          <b>PC (WebView2)</b>, <b>Celular Android 9+</b> o <b>Memoria USB (exFAT, FAT32, NTFS y FAT)</b>
-          por Red Wi-Fi, adaptador LAN USB o cable USB, sin pasos técnicos.
-        </div>
-        <div class="sub-card gh-row">
-          <div>
-            <div style="font-size:11px; color:var(--muted); font-weight:700;">PROYECTO OFICIAL EN GITHUB</div>
-            <div style="color:var(--cyan-hi); font-weight:700; margin-top:2px;">github.com/supermafari007/WiiU-Transfer-Tools</div>
-          </div>
-          <button class="btn" style="border-color:var(--cyan);" onclick="openGitHub()">Abrir en GitHub</button>
-        </div>
-        <div class="sub-card" style="border-color: var(--green);">
-          <div id="updStatus" style="font-weight:700; color:var(--green-hi);">Programa al día (Ver. 2.0.2) • Actualizador conectado a GitHub</div>
-          <div style="font-size:12px; color:var(--muted); margin-top:4px;">Actualiza este programa o descarga la última App para tu Wii U (.wuhb):</div>
-          <div class="upd-actions">
-            <button class="btn btn-green" onclick="updatePcFromGitHub()">Actualizar Programa PC</button>
-            <button class="btn btn-primary" onclick="downloadWuhb()">Descargar App Wii U (.wuhb)</button>
-            <button class="btn" onclick="checkUpdatesManual()">Comprobar</button>
-          </div>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button class="btn" onclick="closeAbout()">Cerrar</button>
-      </div>
-    </div>
-  </div>
-
-<script>
-  let initialized = false;
-
-  function renderPackages(pkgs) {
-    const body = document.getElementById('pkgBody');
-    document.getElementById('pkgCountTitle').textContent = `Juegos en tu PC (${pkgs.length})`;
-    if (!pkgs.length) {
-      body.innerHTML = `<tr><td colspan="3" class="empty-state">No hay juegos en esta carpeta.<br>Copia tus carpetas de juegos aquí o pulsa <b>Cambiar carpeta...</b></td></tr>`;
-      return;
-    }
-    body.innerHTML = pkgs.map(p => {
-      let cls = 'badge-ready';
-      if (p.status.startsWith('Enviando')) cls = 'badge-sending';
-      else if (p.status.startsWith('Instalado')) cls = 'badge-done';
-      const safeName = p.name.replace(/'/g, "\\'");
-      return `<tr ondblclick="openPkg('${safeName}')">
-        <td><b>${p.name}</b></td>
-        <td class="right">${p.size_str}</td>
-        <td class="center"><span class="badge ${cls}">${p.status}</span></td>
-      </tr>`;
-    }).join('');
-  }
-
-  function appendLogs(logs) {
-    if (!logs || !logs.length) return;
-    const box = document.getElementById('logBox');
-    for (const [lvl, txt] of logs) {
-      const div = document.createElement('div');
-      div.className = 'log-' + lvl;
-      div.textContent = txt;
-      box.appendChild(div);
-    }
-    box.scrollTop = box.scrollHeight;
-  }
-
-  async function pollState() {
-    if (!window.pywebview || !window.pywebview.api) return;
-    try {
-      const s = await window.pywebview.api.get_state();
-      if (!initialized && s.icon_b64) {
-        document.getElementById('hdrIcon').src = s.icon_b64;
-        document.getElementById('modalIcon').src = s.icon_b64;
-        initialized = true;
-      }
-      document.getElementById('folderInput').value = s.folder;
-      document.getElementById('stIp').textContent = s.ip_label;
-      document.getElementById('stClient').textContent = s.client_label;
-      document.getElementById('stGame').textContent = s.current_game;
-      document.getElementById('stSpeed').textContent = s.speed_str;
-      document.getElementById('progFill').style.width = s.progress_pct + '%';
-      document.getElementById('progDetail').textContent = s.progress_detail;
-
-      const pill = document.getElementById('statusPill');
-      const btn = document.getElementById('btnToggle');
-      if (s.running) {
-        pill.classList.add('online');
-        document.getElementById('statusText').textContent = `Compartiendo con Wii U • ${s.ip_raw}`;
-        btn.textContent = 'Detener Envío';
-        btn.className = 'btn btn-danger';
-      } else {
-        pill.classList.remove('online');
-        document.getElementById('statusText').textContent = 'En espera';
-        btn.textContent = 'Compartir Juegos';
-        btn.className = 'btn btn-primary';
-      }
-
-      if (s.update_available) {
-        document.getElementById('updateBanner').classList.add('show');
-        document.getElementById('updateBannerText').textContent = `¡Nueva versión v${s.remote_version} disponible en GitHub!`;
-        document.getElementById('updStatus').textContent = `¡Nueva versión v${s.remote_version} disponible para descargar!`;
-        document.getElementById('updStatus').style.color = '#fcd34d';
-      }
-
-      renderPackages(s.packages);
-      appendLogs(s.new_logs);
-    } catch (e) {}
-  }
-
-  async function toggleServer() {
-    await window.pywebview.api.toggle_server();
-    pollState();
-  }
-  async function chooseFolder() {
-    await window.pywebview.api.choose_folder();
-    pollState();
-  }
-  async function refreshPackages() {
-    await window.pywebview.api.refresh_packages();
-    pollState();
-  }
-  async function openFolder() { await window.pywebview.api.open_root_folder(); }
-  async function openPkg(name) { await window.pywebview.api.open_pkg_folder(name); }
-  async function openGitHub() { await window.pywebview.api.open_github(); }
-  function openAbout() { document.getElementById('aboutModal').classList.add('open'); }
-  function closeAbout() { document.getElementById('aboutModal').classList.remove('open'); }
-
-  async function checkUpdatesManual() {
-    const el = document.getElementById('updStatus');
-    el.textContent = 'Consultando GitHub...';
-    el.style.color = '#4dd4ff';
-    const res = await window.pywebview.api.check_updates();
-    el.textContent = res.message;
-    el.style.color = res.newer ? '#fcd34d' : '#2fe082';
-  }
-  async function updatePcFromGitHub() {
-    const el = document.getElementById('updStatus');
-    el.textContent = 'Descargando última versión desde GitHub...';
-    el.style.color = '#4dd4ff';
-    const res = await window.pywebview.api.self_update_pc();
-    el.textContent = res.message;
-    el.style.color = res.ok ? '#2fe082' : '#ff5c6c';
-  }
-  async function downloadWuhb() {
-    const el = document.getElementById('updStatus');
-    el.textContent = 'Descargando WiiU_Transfer.wuhb...';
-    el.style.color = '#4dd4ff';
-    const res = await window.pywebview.api.download_wuhb();
-    el.textContent = res.message;
-    el.style.color = res.ok ? '#2fe082' : '#ff5c6c';
-  }
-
-  window.addEventListener('pywebviewready', () => {
-    pollState();
-    setInterval(pollState, 500);
-  });
-</script>
-</body>
-</html>
-"""
+def apply_dark_titlebar(win: tk.Tk | tk.Toplevel) -> None:
+    if sys.platform.startswith("win"):
+        try:
+            win.update_idletasks()
+            hwnd = ctypes.windll.user32.GetParent(win.winfo_id())
+            dark_val = ctypes.c_int(1)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd, 20, ctypes.byref(dark_val), ctypes.sizeof(dark_val)
+            )
+        except Exception:
+            pass
 
 
-class WebViewApi:
-    def __init__(self) -> None:
-        self.base_dir = Path(__file__).resolve().parent
+class RoundedCard(tk.Canvas):
+    """Contenedor tarjeta con esquinas redondeadas 9-slice (redimensionado instantáneo sin lag)."""
+
+    def __init__(
+        self,
+        parent,
+        bg_outer: str = COL_BG,
+        fill: str = COL_CARD,
+        border: str = COL_BORDER,
+        radius: int = 12,
+        pad: int = 12,
+        **kwargs,
+    ) -> None:
+        super().__init__(parent, bg=bg_outer, highlightthickness=0, bd=0, **kwargs)
+        self._bg_outer = bg_outer
+        self._fill = fill
+        self._border = border
+        self._radius = max(2, radius)
+        self._pad = pad
+
+        tl, tr, bl, br = make_rounded_corners_9slice(
+            self._radius,
+            fill=hex_to_rgba(fill),
+            border=hex_to_rgba(border),
+            border_w=1,
+            bg=hex_to_rgba(bg_outer),
+        )
+        self._c_imgs = (
+            ImageTk.PhotoImage(tl),
+            ImageTk.PhotoImage(tr),
+            ImageTk.PhotoImage(bl),
+            ImageTk.PhotoImage(br),
+        )
+
+        self._rect_v = self.create_rectangle(0, 0, 1, 1, fill=fill, outline="", width=0)
+        self._rect_h = self.create_rectangle(0, 0, 1, 1, fill=fill, outline="", width=0)
+        self._ln_top = self.create_line(0, 0, 1, 0, fill=border, width=1)
+        self._ln_bot = self.create_line(0, 0, 1, 0, fill=border, width=1)
+        self._ln_lft = self.create_line(0, 0, 0, 1, fill=border, width=1)
+        self._ln_rgt = self.create_line(0, 0, 0, 1, fill=border, width=1)
+        self._img_tl = self.create_image(0, 0, anchor="nw", image=self._c_imgs[0])
+        self._img_tr = self.create_image(0, 0, anchor="nw", image=self._c_imgs[1])
+        self._img_bl = self.create_image(0, 0, anchor="nw", image=self._c_imgs[2])
+        self._img_br = self.create_image(0, 0, anchor="nw", image=self._c_imgs[3])
+
+        self.inner = tk.Frame(self, bg=fill, bd=0, highlightthickness=0)
+        self._win_item = self.create_window(pad, pad, anchor="nw", window=self.inner)
+        self.bind("<Configure>", self._on_resize)
+
+    def _on_resize(self, event) -> None:
+        w, h = event.width, event.height
+        if w < 16 or h < 16:
+            return
+        r = min(self._radius, w // 2, h // 2)
+
+        self.coords(self._rect_v, r, 1, w - r, h - 1)
+        self.coords(self._rect_h, 1, r, w - 1, h - r)
+        self.coords(self._ln_top, r, 0, w - r, 0)
+        self.coords(self._ln_bot, r, h - 1, w - r, h - 1)
+        self.coords(self._ln_lft, 0, r, 0, h - r)
+        self.coords(self._ln_rgt, w - 1, r, w - 1, h - r)
+
+        self.coords(self._img_tl, 0, 0)
+        self.coords(self._img_tr, w - r, 0)
+        self.coords(self._img_bl, 0, h - r)
+        self.coords(self._img_br, w - r, h - r)
+
+        iw = max(1, w - 2 * self._pad)
+        ih = max(1, h - 2 * self._pad)
+        self.coords(self._win_item, self._pad, self._pad)
+        self.itemconfigure(self._win_item, width=iw, height=ih)
+
+
+class RoundedButton(tk.Canvas):
+    """Botón moderno redondeado con hover y texto nítido."""
+
+    def __init__(
+        self,
+        parent,
+        text: str,
+        command,
+        width: int,
+        height: int = 34,
+        radius: int = 8,
+        bg_outer: str = COL_CARD,
+        fill: str = COL_BTN_BG,
+        hover: str = COL_BTN_HV,
+        border: str | None = COL_BTN_BD,
+        fg: str = COL_TEXT,
+        font: tuple = ("Segoe UI", 9),
+    ) -> None:
+        super().__init__(
+            parent,
+            width=width,
+            height=height,
+            bg=bg_outer,
+            highlightthickness=0,
+            bd=0,
+            cursor="hand2",
+        )
+        self._btn_w = width
+        self._btn_h = height
+        self._radius = radius
+        self._bg_outer = bg_outer
+        self._fill = fill
+        self._hover = hover
+        self._border = border
+        self._fg = fg
+        self._text = text
+        self._font = font
+        self._command = command
+        self._hovered = False
+
+        self._img_norm: ImageTk.PhotoImage | None = None
+        self._img_hov: ImageTk.PhotoImage | None = None
+        self._bg_item = self.create_image(0, 0, anchor="nw")
+        self._txt_item = self.create_text(
+            width // 2, height // 2, text=text, fill=fg, font=font
+        )
+        self._rebuild_images()
+
+        self.bind("<Enter>", self._on_enter)
+        self.bind("<Leave>", self._on_leave)
+        self.bind("<ButtonRelease-1>", self._on_click)
+
+    def _rebuild_images(self) -> None:
+        bd = hex_to_rgba(self._border) if self._border else None
+        im1 = make_rounded_rect_img(
+            self._btn_w, self._btn_h, self._radius,
+            fill=hex_to_rgba(self._fill), border=bd, border_w=1,
+            bg=hex_to_rgba(self._bg_outer),
+        )
+        im2 = make_rounded_rect_img(
+            self._btn_w, self._btn_h, self._radius,
+            fill=hex_to_rgba(self._hover), border=bd, border_w=1,
+            bg=hex_to_rgba(self._bg_outer),
+        )
+        self._img_norm = ImageTk.PhotoImage(im1)
+        self._img_hov = ImageTk.PhotoImage(im2)
+        self.itemconfigure(self._bg_item, image=self._img_hov if self._hovered else self._img_norm)
+
+    def configure_style(
+        self,
+        text: str | None = None,
+        fill: str | None = None,
+        hover: str | None = None,
+        border: str | None = None,
+        fg: str | None = None,
+    ) -> None:
+        if text is not None:
+            self._text = text
+            self.itemconfigure(self._txt_item, text=text)
+        if fill is not None:
+            self._fill = fill
+        if hover is not None:
+            self._hover = hover
+        self._border = border
+        if fg is not None:
+            self._fg = fg
+            self.itemconfigure(self._txt_item, fill=fg)
+        self._rebuild_images()
+
+    def _on_enter(self, _e) -> None:
+        self._hovered = True
+        if self._img_hov:
+            self.itemconfigure(self._bg_item, image=self._img_hov)
+
+    def _on_leave(self, _e) -> None:
+        self._hovered = False
+        if self._img_norm:
+            self.itemconfigure(self._bg_item, image=self._img_norm)
+
+    def _on_click(self, event) -> None:
+        if 0 <= event.x <= self._btn_w and 0 <= event.y <= self._btn_h and self._command:
+            self._command()
+
+
+class StatusPill(tk.Canvas):
+    """Cápsula de estado redondeada en el header."""
+
+    def __init__(self, parent, width: int = 232, height: int = 34) -> None:
+        super().__init__(
+            parent, width=width, height=height, bg=COL_HEADER, highlightthickness=0, bd=0
+        )
+        self._min_w = width
+        self._pill_w = width
+        self._pill_h = height
+        self._img: ImageTk.PhotoImage | None = None
+        self._font = tkfont.Font(family="Segoe UI", size=10, weight="bold")
+        self._bg_item = self.create_image(0, 0, anchor="nw")
+        self._dot_item = self.create_oval(14, height // 2 - 4, 22, height // 2 + 4, fill="#9AE6B4", outline="")
+        self._txt_item = self.create_text(
+            width // 2 + 6, height // 2, text="En espera", fill="#FFFFFF", font=self._font
+        )
+        self.set_status("En espera", COL_PILL_OFF, "#8EA3B8")
+
+    def set_status(self, text: str, bg_hex: str, dot_hex: str) -> None:
+        dot_x = 16
+        text_x0 = dot_x + 8 + 10
+        self._pill_w = max(self._min_w, text_x0 + self._font.measure(text) + 18)
+        self.configure(width=self._pill_w)
+        im = make_rounded_rect_img(
+            self._pill_w, self._pill_h, self._pill_h // 2,
+            fill=hex_to_rgba(bg_hex), border=None, border_w=0,
+            bg=hex_to_rgba(COL_HEADER),
+        )
+        self._img = ImageTk.PhotoImage(im)
+        self.itemconfigure(self._bg_item, image=self._img)
+        cy = self._pill_h // 2
+        self.coords(self._dot_item, dot_x, cy - 4, dot_x + 8, cy + 4)
+        self.itemconfigure(self._dot_item, fill=dot_hex)
+        avail_center = (text_x0 + self._pill_w - 18) // 2
+        self.coords(self._txt_item, avail_center, cy)
+        self.itemconfigure(self._txt_item, text=text)
+
+
+class WiiUTransferApp:
+    def __init__(self, root: tk.Tk) -> None:
+        self.root = root
+        self.root.title(f"Wii U Transfer Tools v{APP_VERSION} — Programa para PC (por El Diuca)")
+        self.root.geometry("1060x720")
+        self.root.minsize(940, 640)
+        self.root.configure(bg=COL_BG)
+
+        apply_dark_titlebar(self.root)
+
+        if getattr(sys, "frozen", False):
+            self.base_dir = Path(sys.executable).resolve().parent
+        else:
+            self.base_dir = Path(__file__).resolve().parent
         self.packages_dir = (self.base_dir / "packages").resolve()
         self.packages_dir.mkdir(parents=True, exist_ok=True)
-        self.window = None
 
-        _, header_icon_path = ensure_pc_assets(self.base_dir / "assets")
-        raw_icon = header_icon_path.read_bytes()
-        self._icon_b64 = "data:image/png;base64," + base64.b64encode(raw_icon).decode("ascii")
+        app_icon_path, header_icon_path = ensure_pc_assets(self.base_dir / "assets")
+        self._app_icon_tk = ImageTk.PhotoImage(Image.open(app_icon_path))
+        self._header_icon_tk = ImageTk.PhotoImage(Image.open(header_icon_path))
+        try:
+            self.root.iconphoto(True, self._app_icon_tk)
+        except tk.TclError:
+            pass
 
         self.log_queue: queue.Queue[tuple[str, str]] = queue.Queue()
         self.server = TransferServer(
@@ -688,204 +362,902 @@ class WebViewApi:
             udp_port=UDP_DISCOVERY_PORT,
             on_event=self._enqueue_log,
         )
-        self._last_stat_time = time.monotonic()
-        self._last_speed_mbs = 0.0
-        self._cached_pkgs = scan_packages(self.packages_dir)
 
+        self._last_stat_time = time.monotonic()
+        self._pkg_paths: dict[str, Path] = {}
+        self._pkg_iids: dict[str, str] = {}
+        self._pkg_meta: dict[str, dict] = {}
+
+        # Datos de actualización remota desde GitHub
         self._remote_version = APP_VERSION
         self._remote_wuhb_url = DEFAULT_WUHB_URL
+        self._remote_pc_setup_url = DEFAULT_PC_SETUP_URL
+        self._remote_notes = ""
         self._update_available = False
 
-        self._enqueue_log(
-            "INFO",
-            f"Wii U Transfer Tools v{APP_VERSION} (WebView2) listo. Pon tus juegos en la carpeta y pulsa 'Compartir Juegos'.",
+        local_ip = get_local_ip()
+        self.var_folder = tk.StringVar(value=str(self.packages_dir))
+        self.var_ip = tk.StringVar(value=f"{local_ip} (Automática)")
+        self.var_clients = tk.StringVar(value="Esperando conexión...")
+        self.var_current_game = tk.StringVar(value="Ninguno")
+        self.var_prog_detail = tk.StringVar(value="Enviado total: 0 B")
+        self.var_speed = tk.StringVar(value="0.00 MB/s")
+        self.var_pkg_count = tk.StringVar(value="Juegos en tu PC (0)")
+        self.var_tip = tk.StringVar(
+            value=(
+                "1. Abre Wii U Transfer Tools en tu consola\n"
+                "2. Elige arriba 'Modo Red' con el botón [X]\n"
+                "3. Pulsa [Y] para buscar y [A] para instalar"
+            )
         )
-        threading.Thread(target=self._check_updates_worker, daemon=True).start()
+
+        self._setup_styles()
+        self._build_ui()
+        self._refresh_packages()
+
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.root.after(120, self._poll_ui)
+        self._check_updates_async(notify_if_up_to_date=False)
+
+    def _setup_styles(self) -> None:
+        style = ttk.Style()
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+
+        style.configure(
+            "Transfer.Treeview",
+            background=COL_CARD_SOFT,
+            fieldbackground=COL_CARD_SOFT,
+            foreground=COL_TEXT,
+            rowheight=34,
+            borderwidth=0,
+            relief="flat",
+            font=("Segoe UI", 10),
+        )
+        style.configure(
+            "Transfer.Treeview.Heading",
+            background="#202B3A",
+            foreground=COL_TEXT,
+            relief="flat",
+            borderwidth=0,
+            font=("Segoe UI", 9, "bold"),
+            padding=(8, 6),
+        )
+        style.map(
+            "Transfer.Treeview.Heading",
+            background=[("active", "#28364A")],
+        )
+        style.map(
+            "Transfer.Treeview",
+            background=[("selected", "#11384D")],
+            foreground=[("selected", "#FFFFFF")],
+        )
+        style.configure(
+            "Clean.Vertical.TScrollbar",
+            gripcount=0,
+            background="#324359",
+            troughcolor=COL_CARD_SOFT,
+            bordercolor=COL_CARD_SOFT,
+            arrowcolor=COL_MUTED,
+            relief="flat",
+        )
 
     def _enqueue_log(self, level: str, message: str) -> None:
         ts = time.strftime("%H:%M:%S")
         self.log_queue.put((level, f"[{ts}] {message}"))
 
-    def _check_updates_worker(self) -> dict:
-        try:
-            req = urllib.request.Request(
-                f"{VERSION_JSON_URL}?t={int(time.time())}",
-                headers={"User-Agent": f"WiiU-Transfer-Tools-PC/{APP_VERSION}"},
+    def _build_ui(self) -> None:
+        # 1. Header Oscuro con acento Cyan + Botón "i Acerca de / GitHub"
+        header = tk.Frame(self.root, bg=COL_HEADER)
+        header.pack(fill="x", side="top")
+
+        icon_lbl = tk.Label(header, image=self._header_icon_tk, bg=COL_HEADER, bd=0)
+        icon_lbl.pack(side="left", padx=(20, 12), pady=12)
+
+        title_box = tk.Frame(header, bg=COL_HEADER)
+        title_box.pack(side="left", pady=12)
+        tk.Label(
+            title_box,
+            text="Wii U Transfer Tools",
+            bg=COL_HEADER,
+            fg="#FFFFFF",
+            font=("Segoe UI", 17, "bold"),
+        ).pack(anchor="w")
+        tk.Label(
+            title_box,
+            text=f"Envía e instala juegos desde tu PC a la Wii U  •  Ver. {APP_VERSION}  •  Por El Diuca",
+            bg=COL_HEADER,
+            fg="#A8D8EC",
+            font=("Segoe UI", 9),
+        ).pack(anchor="w", pady=(2, 0))
+
+        self.status_pill = StatusPill(header, width=230, height=34)
+        self.status_pill.pack(side="right", padx=(10, 20), pady=18)
+
+        self.btn_about = RoundedButton(
+            header,
+            text="i  Acerca de / GitHub",
+            command=self._open_about_dialog,
+            width=158,
+            height=34,
+            radius=17,
+            bg_outer=COL_HEADER,
+            fill=COL_PILL_OFF,
+            hover="#0F354D",
+            border=COL_CYAN,
+            fg="#A8D8EC",
+            font=("Segoe UI", 9, "bold"),
+        )
+        self.btn_about.pack(side="right", padx=(0, 6), pady=18)
+
+        tk.Frame(self.root, bg=COL_CYAN, height=2).pack(fill="x", side="top")
+
+        # Banner de alerta de actualización automática (oculto si está al día)
+        self.update_banner = tk.Frame(
+            self.root,
+            bg=COL_AMBER_BG,
+            highlightbackground=COL_AMBER_BD,
+            highlightthickness=1,
+        )
+        self.lbl_update_banner = tk.Label(
+            self.update_banner,
+            text="¡Nueva versión disponible en GitHub!",
+            bg=COL_AMBER_BG,
+            fg=COL_AMBER_TX,
+            font=("Segoe UI", 9, "bold"),
+        )
+        self.lbl_update_banner.pack(side="left", padx=14, pady=6)
+        RoundedButton(
+            self.update_banner,
+            text="Actualizar ahora",
+            command=self._open_about_dialog,
+            width=130,
+            height=26,
+            radius=6,
+            bg_outer=COL_AMBER_BG,
+            fill=COL_AMBER_BD,
+            hover="#D97706",
+            border=None,
+            fg="#111827",
+            font=("Segoe UI", 9, "bold"),
+        ).pack(side="right", padx=12, pady=5)
+
+        # Contenedor principal
+        main = tk.Frame(self.root, bg=COL_BG)
+        main.pack(fill="both", expand=True, padx=16, pady=12)
+
+        # 2. Barra de control (tarjeta redondeada)
+        ctrl_card = RoundedCard(main, bg_outer=COL_BG, fill=COL_CARD, radius=12, pad=10, height=60)
+        ctrl_card.pack(fill="x", pady=(0, 12))
+        ctrl_card.pack_propagate(False)
+
+        ctrl_inner = ctrl_card.inner
+        tk.Label(
+            ctrl_inner,
+            text="Carpeta de juegos:",
+            bg=COL_CARD,
+            fg=COL_TEXT,
+            font=("Segoe UI", 9, "bold"),
+        ).pack(side="left", padx=(4, 8))
+
+        folder_entry = tk.Entry(
+            ctrl_inner,
+            textvariable=self.var_folder,
+            state="readonly",
+            readonlybackground=COL_CARD_SOFT,
+            fg=COL_TEXT,
+            relief="flat",
+            highlightbackground=COL_BORDER,
+            highlightthickness=1,
+            font=("Segoe UI", 9),
+        )
+        folder_entry.pack(side="left", fill="x", expand=True, ipady=6, padx=(0, 8))
+
+        RoundedButton(
+            ctrl_inner, "Cambiar carpeta...", self._choose_folder, width=136, height=34
+        ).pack(side="left", padx=3)
+        RoundedButton(
+            ctrl_inner, "Actualizar", self._refresh_packages, width=88, height=34
+        ).pack(side="left", padx=3)
+        RoundedButton(
+            ctrl_inner, "Abrir carpeta", self._open_root_folder, width=108, height=34
+        ).pack(side="left", padx=(3, 8))
+
+        self.btn_toggle = RoundedButton(
+            ctrl_inner,
+            text="Compartir Juegos",
+            command=self.toggle_server,
+            width=162,
+            height=34,
+            radius=8,
+            fill=COL_CYAN,
+            hover=COL_CYAN_DK,
+            border=None,
+            fg="#FFFFFF",
+            font=("Segoe UI", 10, "bold"),
+        )
+        self.btn_toggle.pack(side="right")
+
+        # 3. Cuerpo dividido (2 columnas)
+        body = tk.Frame(main, bg=COL_BG)
+        body.pack(fill="both", expand=True, pady=(0, 12))
+        body.columnconfigure(0, weight=64)
+        body.columnconfigure(1, weight=36)
+        body.rowconfigure(0, weight=1)
+
+        # Columna izquierda: Juegos en tu PC
+        left_card = RoundedCard(body, bg_outer=COL_BG, fill=COL_CARD, radius=12, pad=14)
+        left_card.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+
+        left_hdr = tk.Frame(left_card.inner, bg=COL_CARD)
+        left_hdr.pack(fill="x", pady=(0, 8))
+        tk.Label(
+            left_hdr,
+            textvariable=self.var_pkg_count,
+            bg=COL_CARD,
+            fg=COL_TEXT,
+            font=("Segoe UI", 12, "bold"),
+        ).pack(side="left")
+        tk.Label(
+            left_hdr,
+            text="Doble clic para abrir carpeta del juego",
+            bg=COL_CARD,
+            fg=COL_MUTED,
+            font=("Segoe UI", 8),
+        ).pack(side="right", pady=3)
+
+        tree_wrap = tk.Frame(left_card.inner, bg=COL_CARD, highlightbackground=COL_BORDER, highlightthickness=1)
+        tree_wrap.pack(fill="both", expand=True)
+
+        cols = ("name", "size", "status")
+        self.tree = ttk.Treeview(
+            tree_wrap,
+            columns=cols,
+            show="headings",
+            style="Transfer.Treeview",
+            selectmode="browse",
+        )
+        self.tree.heading("name", text="Nombre del Juego", anchor="w")
+        self.tree.heading("size", text="Tamaño", anchor="e")
+        self.tree.heading("status", text="Estado", anchor="center")
+
+        self.tree.column("name", width=310, minwidth=180, stretch=True, anchor="w")
+        self.tree.column("size", width=110, minwidth=90, stretch=False, anchor="e")
+        self.tree.column("status", width=165, minwidth=140, stretch=False, anchor="center")
+
+        vsb = ttk.Scrollbar(
+            tree_wrap, orient="vertical", command=self.tree.yview, style="Clean.Vertical.TScrollbar"
+        )
+        self.tree.configure(yscrollcommand=vsb.set)
+        self.tree.pack(side="left", fill="both", expand=True)
+        vsb.pack(side="right", fill="y")
+        self.tree.bind("<Double-1>", self._on_tree_double_click)
+
+        # Columna derecha: Conexión con tu Wii U + Progreso en vivo
+        right_card = RoundedCard(body, bg_outer=COL_BG, fill=COL_CARD, radius=12, pad=14)
+        right_card.grid(row=0, column=1, sticky="nsew")
+
+        tk.Label(
+            right_card.inner,
+            text="Conexión con tu Wii U",
+            bg=COL_CARD,
+            fg=COL_TEXT,
+            font=("Segoe UI", 12, "bold"),
+        ).pack(anchor="w", pady=(0, 6))
+
+        stats_box = tk.Frame(right_card.inner, bg=COL_CARD)
+        stats_box.pack(fill="x")
+
+        self._add_stat_row(stats_box, "Consola Wii U:", self.var_clients, COL_GREEN_HI)
+        self._add_stat_row(stats_box, "Enviando ahora:", self.var_current_game, COL_CYAN_HI)
+
+        # Barra de progreso de envío en vivo
+        prog_frame = tk.Frame(right_card.inner, bg=COL_CARD)
+        prog_frame.pack(fill="x", pady=(6, 4))
+        self.prog_canvas = tk.Canvas(
+            prog_frame, height=12, bg=COL_TRACK, highlightthickness=0, bd=0
+        )
+        self.prog_canvas.pack(fill="x")
+        self._prog_rect = self.prog_canvas.create_rectangle(0, 0, 0, 12, fill=COL_CYAN, outline="")
+        tk.Label(
+            prog_frame,
+            textvariable=self.var_prog_detail,
+            bg=COL_CARD,
+            fg=COL_MUTED,
+            font=("Segoe UI", 8, "bold"),
+        ).pack(anchor="w", pady=(3, 0))
+
+        stats_box2 = tk.Frame(right_card.inner, bg=COL_CARD)
+        stats_box2.pack(fill="x")
+        self._add_stat_row(stats_box2, "Velocidad:", self.var_speed, COL_GREEN_HI)
+        self._add_stat_row(stats_box2, "Red de este PC:", self.var_ip, COL_TEXT)
+
+        tip_card = RoundedCard(
+            right_card.inner,
+            bg_outer=COL_CARD,
+            fill=COL_TIP_BG,
+            border=COL_TIP_BD,
+            radius=10,
+            pad=10,
+            height=108,
+        )
+        tip_card.pack(fill="x", pady=(10, 0))
+        tip_card.pack_propagate(False)
+
+        tk.Label(
+            tip_card.inner,
+            text="¿Cómo instalar en tu Wii U?",
+            bg=COL_TIP_BG,
+            fg=COL_CYAN_HI,
+            font=("Segoe UI", 9, "bold"),
+        ).pack(anchor="w", pady=(0, 3))
+        tk.Label(
+            tip_card.inner,
+            textvariable=self.var_tip,
+            justify="left",
+            bg=COL_TIP_BG,
+            fg=COL_TEXT,
+            font=("Segoe UI", 9),
+        ).pack(anchor="nw")
+
+        # 4. Estado y mensajes recientes
+        log_card = RoundedCard(main, bg_outer=COL_BG, fill=COL_CARD, radius=12, pad=12, height=140)
+        log_card.pack(fill="x")
+        log_card.pack_propagate(False)
+
+        tk.Label(
+            log_card.inner,
+            text="Estado y mensajes recientes",
+            bg=COL_CARD,
+            fg=COL_TEXT,
+            font=("Segoe UI", 11, "bold"),
+        ).pack(anchor="w", pady=(0, 6))
+
+        log_box = RoundedCard(
+            log_card.inner,
+            bg_outer=COL_CARD,
+            fill=COL_CARD_SOFT,
+            border=COL_BORDER,
+            radius=8,
+            pad=6,
+        )
+        log_box.pack(fill="both", expand=True)
+
+        self.log_text = tk.Text(
+            log_box.inner,
+            height=4,
+            bg=COL_CARD_SOFT,
+            fg=COL_TEXT,
+            relief="flat",
+            bd=0,
+            state="disabled",
+            font=("Consolas", 9),
+            wrap="word",
+        )
+        log_sb = ttk.Scrollbar(
+            log_box.inner, orient="vertical", command=self.log_text.yview, style="Clean.Vertical.TScrollbar"
+        )
+        self.log_text.configure(yscrollcommand=log_sb.set)
+        self.log_text.pack(side="left", fill="both", expand=True)
+        log_sb.pack(side="right", fill="y")
+
+        self.log_text.tag_configure("INFO", foreground=COL_TEXT)
+        self.log_text.tag_configure("OK", foreground=COL_GREEN_HI)
+        self.log_text.tag_configure("WARN", foreground="#F5B041")
+        self.log_text.tag_configure("ERR", foreground="#FF5C6C")
+
+        self._enqueue_log(
+            "INFO",
+            f"Wii U Transfer Tools v{APP_VERSION} listo. Pon tus juegos en la carpeta y pulsa 'Compartir Juegos'.",
+        )
+
+    def _add_stat_row(self, parent, label: str, var: tk.StringVar, val_color: str) -> None:
+        row = tk.Frame(parent, bg=COL_CARD)
+        row.pack(fill="x", pady=2)
+        tk.Label(row, text=label, bg=COL_CARD, fg=COL_MUTED, font=("Segoe UI", 9)).pack(side="left")
+        tk.Label(
+            row, textvariable=var, bg=COL_CARD, fg=val_color, font=("Segoe UI", 9, "bold")
+        ).pack(side="right")
+
+    def _choose_folder(self) -> None:
+        chosen = filedialog.askdirectory(
+            title="Seleccionar carpeta de juegos de Wii U",
+            initialdir=str(self.packages_dir),
+        )
+        if not chosen:
+            return
+        self.packages_dir = Path(chosen).resolve()
+        self.var_folder.set(str(self.packages_dir))
+        self.server.set_root(self.packages_dir)
+        self._refresh_packages()
+
+    def _open_root_folder(self) -> None:
+        open_in_explorer(self.packages_dir)
+
+    def _on_tree_double_click(self, _event) -> None:
+        sel = self.tree.selection()
+        if not sel:
+            return
+        path = self._pkg_paths.get(sel[0])
+        if path and path.exists():
+            open_in_explorer(path)
+
+    def _refresh_packages(self) -> None:
+        for iid in self.tree.get_children():
+            self.tree.delete(iid)
+        self._pkg_paths.clear()
+        self._pkg_iids.clear()
+        self._pkg_meta.clear()
+
+        pkgs = scan_packages(self.packages_dir)
+        self.var_pkg_count.set(f"Juegos en tu PC ({len(pkgs)})")
+        for pkg in pkgs:
+            status = "Listo para instalar" if pkg["has_tmd"] else "Carpeta de archivos"
+            iid = self.tree.insert(
+                "",
+                "end",
+                values=(
+                    pkg["name"],
+                    format_bytes(pkg["total_bytes"]),
+                    status,
+                ),
             )
-            with urllib.request.urlopen(req, timeout=6) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-            rem = str(data.get("version", APP_VERSION)).strip()
-            wuhb = str(data.get("wiiu_wuhb_url", DEFAULT_WUHB_URL)).strip()
-            newer = is_version_newer(APP_VERSION, rem)
-            self._remote_version = rem
-            self._remote_wuhb_url = wuhb or DEFAULT_WUHB_URL
-            self._update_available = newer
-            if newer:
-                self._enqueue_log("OK", f"Nueva versión v{rem} disponible en GitHub.")
-                return {"newer": True, "message": f"¡Nueva versión v{rem} disponible en GitHub!"}
-            return {"newer": False, "message": f"Programa al día (Ver. {APP_VERSION})."}
-        except Exception as exc:
-            return {"newer": False, "message": f"No se pudo consultar GitHub: {exc}"}
-
-    def get_state(self) -> dict:
-        now = time.monotonic()
-        elapsed = now - self._last_stat_time
-        stats = self.server.get_stats(reset_window=(elapsed >= 0.45))
-        if elapsed >= 0.45:
-            self._last_speed_mbs = (stats["bytes_sent_window"] / (1024.0 * 1024.0)) / max(elapsed, 0.001)
-            self._last_stat_time = now
-
-        ip = get_local_ip()
-        clients = stats["active_clients"]
-        cur_pkg = stats.get("current_pkg") or ""
-        pkg_sent = stats.get("pkg_bytes_sent", 0)
-        pkg_total = stats.get("pkg_total_bytes", 0)
-        completed = stats.get("completed_pkgs", set())
-
-        if cur_pkg and pkg_total > 0:
-            pct = min(100, int((pkg_sent / float(pkg_total)) * 100))
-            prog_detail = f"Enviado: {format_bytes(pkg_sent)} de {format_bytes(pkg_total)} ({pct}%)"
-        else:
-            pct = 0
-            prog_detail = f"Enviado total: {format_bytes(stats['bytes_sent_total'])}"
-
-        pkgs_out = []
-        for p in self._cached_pkgs:
-            name = p["name"]
-            if name in completed:
-                st = "Instalado en Wii U"
-            elif name == cur_pkg and pkg_total > 0:
-                st = f"Enviando a Wii U ({min(99, pct)}%)"
-            else:
-                st = "Listo para instalar" if p.get("has_tmd", True) else "Carpeta de archivos"
-            pkgs_out.append({
-                "name": name,
-                "size_str": format_bytes(p["total_bytes"]),
-                "status": st,
-            })
-
-        logs = []
-        while True:
-            try:
-                logs.append(self.log_queue.get_nowait())
-            except queue.Empty:
-                break
-
-        return {
-            "icon_b64": self._icon_b64,
-            "folder": str(self.packages_dir),
-            "running": self.server.is_running,
-            "ip_raw": ip,
-            "ip_label": f"{ip} (Automática)",
-            "client_label": f"Conectada ({clients[0]})" if clients else "Esperando conexión...",
-            "current_game": cur_pkg if cur_pkg else "Ninguno",
-            "speed_str": f"{self._last_speed_mbs:.2f} MB/s",
-            "progress_pct": pct,
-            "progress_detail": prog_detail,
-            "packages": pkgs_out,
-            "new_logs": logs,
-            "update_available": self._update_available,
-            "remote_version": self._remote_version,
-        }
+            self._pkg_paths[iid] = self.packages_dir / pkg["name"]
+            self._pkg_iids[pkg["name"]] = iid
+            self._pkg_meta[pkg["name"]] = pkg
 
     def toggle_server(self) -> None:
         if self.server.is_running:
             self.server.stop()
+            self.btn_toggle.configure_style(
+                text="Compartir Juegos", fill=COL_CYAN, hover=COL_CYAN_DK, fg="#FFFFFF"
+            )
+            self.status_pill.set_status("En espera", COL_PILL_OFF, "#CBD5E0")
         else:
             try:
                 self.server.start()
+                ip = get_local_ip()
+                self.var_ip.set(f"{ip} (Automática)")
+                self.btn_toggle.configure_style(
+                    text="Detener Envío", fill=COL_RED, hover=COL_RED_HV, fg="#FFFFFF"
+                )
+                self.status_pill.set_status(f"Compartiendo con Wii U • {ip}", COL_GREEN, "#A7F3D0")
             except OSError as exc:
                 self._enqueue_log("ERR", f"No se pudo compartir en red: {exc}")
 
-    def choose_folder(self) -> None:
-        if not self.window:
-            return
-        res = self.window.create_file_dialog(
-            webview.FOLDER_DIALOG, directory=str(self.packages_dir)
-        )
-        if res and len(res) > 0:
-            self.packages_dir = Path(res[0]).resolve()
-            self.server.set_root(self.packages_dir)
-            self._cached_pkgs = scan_packages(self.packages_dir)
+    def _poll_ui(self) -> None:
+        while True:
+            try:
+                level, line = self.log_queue.get_nowait()
+            except queue.Empty:
+                break
+            tag = level if level in ("INFO", "OK", "WARN", "ERR") else "INFO"
+            self.log_text.configure(state="normal")
+            self.log_text.insert("end", line + "\n", tag)
+            self.log_text.see("end")
+            self.log_text.configure(state="disabled")
 
-    def refresh_packages(self) -> None:
-        self._cached_pkgs = scan_packages(self.packages_dir)
-        self._enqueue_log("INFO", f"Lista actualizada: {len(self._cached_pkgs)} juego(s) encontrado(s).")
+        now = time.monotonic()
+        elapsed = now - self._last_stat_time
+        if elapsed >= 0.45:
+            stats = self.server.get_stats(reset_window=True)
+            clients = stats["active_clients"]
+            if clients:
+                self.var_clients.set(f"Conectada ({clients[0]})")
+            else:
+                self.var_clients.set("Esperando conexión...")
 
-    def open_root_folder(self) -> None:
-        open_in_explorer(self.packages_dir)
+            cur_pkg = stats.get("current_pkg") or ""
+            pkg_sent = stats.get("pkg_bytes_sent", 0)
+            pkg_total = stats.get("pkg_total_bytes", 0)
+            completed = stats.get("completed_pkgs", set())
 
-    def open_pkg_folder(self, name: str) -> None:
-        target = self.packages_dir / name
-        if target.exists():
-            open_in_explorer(target)
+            if cur_pkg:
+                self.var_current_game.set(cur_pkg[:26])
+            else:
+                self.var_current_game.set("Ninguno")
 
-    def open_github(self) -> None:
-        webbrowser.open(GITHUB_REPO_URL)
+            cw = max(1, self.prog_canvas.winfo_width())
+            if cur_pkg and pkg_total > 0:
+                ratio = min(1.0, max(0.0, pkg_sent / float(pkg_total)))
+                pct = int(ratio * 100)
+                self.prog_canvas.coords(self._prog_rect, 0, 0, int(cw * ratio), 12)
+                self.var_prog_detail.set(
+                    f"Enviado: {format_bytes(pkg_sent)} de {format_bytes(pkg_total)} ({pct}%)"
+                )
+            else:
+                self.prog_canvas.coords(self._prog_rect, 0, 0, 0, 12)
+                self.var_prog_detail.set(
+                    f"Enviado total: {format_bytes(stats['bytes_sent_total'])}"
+                )
 
-    def check_updates(self) -> dict:
-        return self._check_updates_worker()
+            # Actualizar columna Estado en la tabla de juegos
+            for name, iid in self._pkg_iids.items():
+                meta = self._pkg_meta.get(name, {})
+                if name in completed:
+                    new_st = "Instalado en Wii U"
+                elif name == cur_pkg and pkg_total > 0:
+                    pct = min(99, int((pkg_sent / float(pkg_total)) * 100))
+                    new_st = f"Enviando a Wii U ({pct}%)"
+                else:
+                    new_st = "Listo para instalar" if meta.get("has_tmd", True) else "Carpeta de archivos"
+                cur_vals = self.tree.item(iid, "values")
+                if len(cur_vals) == 3 and cur_vals[2] != new_st:
+                    self.tree.item(iid, values=(cur_vals[0], cur_vals[1], new_st))
 
-    def self_update_pc(self) -> dict:
-        files = ["transfer_server.py", "wiiu_transfer_gui.py", "ui_assets.py", "Instalar_WiiU_Transfer_Tools.py"]
-        try:
-            for fname in files:
+            mb_s = (stats["bytes_sent_window"] / (1024.0 * 1024.0)) / max(elapsed, 0.001)
+            self.var_speed.set(f"{mb_s:.2f} MB/s")
+            self._last_stat_time = now
+
+        if self.root.winfo_exists():
+            self.root.after(120, self._poll_ui)
+
+    # =========================================================================
+    # Verificador de Actualizaciones en GitHub + Modal "Acerca de"
+    # =========================================================================
+    def _check_updates_async(self, notify_if_up_to_date: bool = False) -> None:
+        def worker() -> None:
+            try:
                 req = urllib.request.Request(
-                    f"{RAW_PC_BASE_URL}/{fname}?t={int(time.time())}",
+                    f"{VERSION_JSON_URL}?t={int(time.time())}",
                     headers={"User-Agent": f"WiiU-Transfer-Tools-PC/{APP_VERSION}"},
                 )
-                with urllib.request.urlopen(req, timeout=12) as resp:
-                    blob = resp.read()
-                if len(blob) > 128:
-                    (self.base_dir / fname).write_bytes(blob)
-            self._enqueue_log("OK", "Programa PC actualizado desde GitHub. Reinicia la app para aplicar cambios.")
-            return {"ok": True, "message": "¡Actualizado con éxito! Cierra y vuelve a abrir el programa."}
-        except Exception as exc:
-            return {"ok": False, "message": f"Error al actualizar: {exc}"}
+                with urllib.request.urlopen(req, timeout=6) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                rem_ver = str(data.get("version", APP_VERSION)).strip()
+                wuhb_url = str(data.get("wiiu_wuhb_url", DEFAULT_WUHB_URL)).strip()
+                setup_url = str(data.get("pc_setup_url", DEFAULT_PC_SETUP_URL)).strip()
+                notes = str(data.get("notes", "")).strip()
+                newer = is_version_newer(APP_VERSION, rem_ver)
 
-    def download_wuhb(self) -> dict:
-        if not self.window:
-            return {"ok": False, "message": "Ventana no lista."}
-        res = self.window.create_file_dialog(
-            webview.SAVE_DIALOG,
-            directory=str(self.base_dir),
-            save_filename="WiiU_Transfer.wuhb",
-            file_types=("Aplicación Wii U (*.wuhb)", "Todos (*.*)"),
-        )
-        if not res:
-            return {"ok": False, "message": "Descarga cancelada."}
-        save_path = Path(res[0] if isinstance(res, (list, tuple)) else res)
+                def on_ui() -> None:
+                    self._remote_version = rem_ver
+                    self._remote_wuhb_url = wuhb_url or DEFAULT_WUHB_URL
+                    self._remote_pc_setup_url = setup_url or DEFAULT_PC_SETUP_URL
+                    self._remote_notes = notes
+                    self._update_available = newer
+                    if newer:
+                        self.lbl_update_banner.configure(
+                            text=f"¡Nueva versión v{rem_ver} disponible en GitHub! ({notes or 'Mejoras disponibles'})"
+                        )
+                        self.update_banner.pack(fill="x", side="top", padx=16, pady=(8, 0))
+                        self._enqueue_log("OK", f"Nueva versión v{rem_ver} disponible en GitHub.")
+                    else:
+                        self.update_banner.pack_forget()
+                        if notify_if_up_to_date:
+                            messagebox.showinfo(
+                                "Actualizaciones",
+                                f"Ya tienes instalada la versión más reciente (v{APP_VERSION}).",
+                            )
+
+                if self.root.winfo_exists():
+                    self.root.after(0, on_ui)
+            except Exception as exc:
+                if notify_if_up_to_date and self.root.winfo_exists():
+                    self.root.after(
+                        0,
+                        lambda: messagebox.showwarning(
+                            "Actualizaciones",
+                            f"No se pudo conectar con GitHub:\n{exc}",
+                        ),
+                    )
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _open_about_dialog(self) -> None:
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Acerca de Wii U Transfer Tools")
+        dlg.geometry("580x450")
+        dlg.resizable(False, False)
+        dlg.configure(bg=COL_BG)
+        dlg.transient(self.root)
+        dlg.grab_set()
+        apply_dark_titlebar(dlg)
         try:
-            req = urllib.request.Request(
-                f"{self._remote_wuhb_url}?t={int(time.time())}",
-                headers={"User-Agent": f"WiiU-Transfer-Tools-PC/{APP_VERSION}"},
-            )
-            with urllib.request.urlopen(req, timeout=25) as resp:
-                blob = resp.read()
-            save_path.write_bytes(blob)
-            self._enqueue_log("OK", f"WiiU_Transfer.wuhb guardado en: {save_path}")
-            return {"ok": True, "message": f"Guardado ({format_bytes(len(blob))}) en {save_path.name}"}
-        except Exception as exc:
-            return {"ok": False, "message": f"Error descargando .wuhb: {exc}"}
+            dlg.iconphoto(False, self._app_icon_tk)
+        except Exception:
+            pass
 
-    def shutdown(self) -> None:
+        # Header del diálogo
+        hdr = tk.Frame(dlg, bg=COL_HEADER)
+        hdr.pack(fill="x")
+        tk.Label(hdr, image=self._header_icon_tk, bg=COL_HEADER).pack(side="left", padx=(16, 10), pady=10)
+        h_txt = tk.Frame(hdr, bg=COL_HEADER)
+        h_txt.pack(side="left", pady=10)
+        tk.Label(
+            h_txt,
+            text="Acerca de Wii U Transfer Tools",
+            bg=COL_HEADER,
+            fg="#FFFFFF",
+            font=("Segoe UI", 14, "bold"),
+        ).pack(anchor="w")
+        tk.Label(
+            h_txt,
+            text=f"Versión {APP_VERSION}  •  Desarrollado por El Diuca",
+            bg=COL_HEADER,
+            fg="#A8D8EC",
+            font=("Segoe UI", 9, "bold"),
+        ).pack(anchor="w")
+        tk.Frame(dlg, bg=COL_CYAN, height=2).pack(fill="x")
+
+        body = tk.Frame(dlg, bg=COL_BG)
+        body.pack(fill="both", expand=True, padx=18, pady=14)
+
+        # Descripción breve
+        desc_card = RoundedCard(body, bg_outer=COL_BG, fill=COL_CARD, radius=10, pad=12, height=84)
+        desc_card.pack(fill="x", pady=(0, 10))
+        desc_card.pack_propagate(False)
+        tk.Label(
+            desc_card.inner,
+            text=(
+                "Herramienta gratuita de código abierto para enviar e instalar juegos de Wii U\n"
+                "directamente desde tu PC, Celular Android o Memoria USB (exFAT, FAT32, NTFS y FAT)\n"
+                "por Red Wi-Fi, adaptador LAN USB o cable USB, sin pasos técnicos."
+            ),
+            justify="left",
+            bg=COL_CARD,
+            fg=COL_TEXT,
+            font=("Segoe UI", 9),
+        ).pack(anchor="w")
+
+        # Enlace oficial a GitHub
+        gh_card = RoundedCard(body, bg_outer=COL_BG, fill=COL_CARD, radius=10, pad=12, height=74)
+        gh_card.pack(fill="x", pady=(0, 10))
+        gh_card.pack_propagate(False)
+        gh_left = tk.Frame(gh_card.inner, bg=COL_CARD)
+        gh_left.pack(side="left", fill="x", expand=True)
+        tk.Label(
+            gh_left,
+            text="PROYECTO OFICIAL EN GITHUB",
+            bg=COL_CARD,
+            fg=COL_MUTED,
+            font=("Segoe UI", 8, "bold"),
+        ).pack(anchor="w")
+        tk.Label(
+            gh_left,
+            text="https://github.com/supermafari007/WiiU-Transfer-Tools",
+            bg=COL_CARD,
+            fg=COL_CYAN_HI,
+            font=("Segoe UI", 9, "bold"),
+        ).pack(anchor="w", pady=(2, 0))
+        RoundedButton(
+            gh_card.inner,
+            text="Abrir en GitHub",
+            command=lambda: webbrowser.open(GITHUB_REPO_URL),
+            width=136,
+            height=34,
+            radius=8,
+            bg_outer=COL_CARD,
+            fill=COL_BTN_BG,
+            hover=COL_BTN_HV,
+            border=COL_CYAN,
+            fg="#FFFFFF",
+            font=("Segoe UI", 9, "bold"),
+        ).pack(side="right", pady=6)
+
+        # Centro de Actualizaciones (PC + Wii U .wuhb)
+        upd_card = RoundedCard(
+            body,
+            bg_outer=COL_BG,
+            fill=COL_CARD,
+            border=COL_AMBER_BD if self._update_available else COL_GREEN,
+            radius=10,
+            pad=12,
+            height=118,
+        )
+        upd_card.pack(fill="x", pady=(0, 12))
+        upd_card.pack_propagate(False)
+
+        var_upd_status = tk.StringVar(
+            value=(
+                f"¡Nueva versión v{self._remote_version} disponible en GitHub!"
+                if self._update_available
+                else f"Programa al día (Ver. {APP_VERSION})  •  Actualizador conectado a GitHub"
+            )
+        )
+        lbl_upd = tk.Label(
+            upd_card.inner,
+            textvariable=var_upd_status,
+            bg=COL_CARD,
+            fg=COL_AMBER_TX if self._update_available else COL_GREEN_HI,
+            font=("Segoe UI", 9, "bold"),
+        )
+        lbl_upd.pack(anchor="w", pady=(0, 4))
+
+        tk.Label(
+            upd_card.inner,
+            text="Puedes actualizar este programa de PC o descargar la última App para tu consola Wii U (.wuhb):",
+            bg=COL_CARD,
+            fg=COL_MUTED,
+            font=("Segoe UI", 8),
+        ).pack(anchor="w", pady=(0, 8))
+
+        btn_row = tk.Frame(upd_card.inner, bg=COL_CARD)
+        btn_row.pack(fill="x")
+
+        RoundedButton(
+            btn_row,
+            text="Actualizar Programa PC",
+            command=lambda: self._self_update_pc_from_github(var_upd_status, lbl_upd),
+            width=182,
+            height=34,
+            radius=8,
+            bg_outer=COL_CARD,
+            fill=COL_GREEN,
+            hover=COL_GREEN_HV,
+            border=None,
+            fg="#FFFFFF",
+            font=("Segoe UI", 9, "bold"),
+        ).pack(side="left", padx=(0, 8))
+
+        RoundedButton(
+            btn_row,
+            text="Descargar App Wii U (.wuhb)",
+            command=lambda: self._download_wuhb_from_github(var_upd_status, lbl_upd),
+            width=204,
+            height=34,
+            radius=8,
+            bg_outer=COL_CARD,
+            fill=COL_CYAN,
+            hover=COL_CYAN_DK,
+            border=None,
+            fg="#FFFFFF",
+            font=("Segoe UI", 9, "bold"),
+        ).pack(side="left", padx=(0, 8))
+
+        RoundedButton(
+            btn_row,
+            text="Comprobar",
+            command=lambda: self._check_updates_async(notify_if_up_to_date=True),
+            width=110,
+            height=34,
+            radius=8,
+            bg_outer=COL_CARD,
+            fill=COL_BTN_BG,
+            hover=COL_BTN_HV,
+            border=COL_BORDER,
+            fg=COL_TEXT,
+            font=("Segoe UI", 9, "bold"),
+        ).pack(side="right")
+
+        RoundedButton(
+            body,
+            text="Cerrar ventana",
+            command=dlg.destroy,
+            width=140,
+            height=34,
+            radius=8,
+            bg_outer=COL_BG,
+            fill=COL_BTN_BG,
+            hover=COL_BTN_HV,
+            border=COL_BORDER,
+            fg=COL_TEXT,
+            font=("Segoe UI", 9, "bold"),
+        ).pack(side="right")
+
+    def _self_update_pc_from_github(self, var_status: tk.StringVar, lbl: tk.Label) -> None:
+        var_status.set("Descargando instalador de actualización desde GitHub...")
+        lbl.configure(fg=COL_CYAN_HI)
+
+        def worker() -> None:
+            if getattr(sys, "frozen", False):
+                try:
+                    import tempfile
+                    dl_path = Path(tempfile.gettempdir()) / f"WiiU_Transfer_Tools_Setup_v{self._remote_version}.exe"
+                    req = urllib.request.Request(
+                        f"{self._remote_pc_setup_url}?t={int(time.time())}",
+                        headers={"User-Agent": f"WiiU-Transfer-Tools-PC/{APP_VERSION}"},
+                    )
+                    with urllib.request.urlopen(req, timeout=30) as resp:
+                        dl_path.write_bytes(resp.read())
+                    subprocess.Popen([str(dl_path)])
+                    if self.root.winfo_exists():
+                        self.root.after(0, self.on_close)
+                except Exception as exc:
+                    if self.root.winfo_exists():
+                        self.root.after(
+                            0,
+                            lambda: (
+                                var_status.set(f"Error al descargar actualizador: {exc}"),
+                                lbl.configure(fg="#FF5C6C"),
+                            ),
+                        )
+                return
+
+            files = ["transfer_server.py", "wiiu_transfer_gui.py", "ui_assets.py"]
+            ok_count = 0
+            try:
+                for fname in files:
+                    req = urllib.request.Request(
+                        f"{RAW_PC_BASE_URL}/{fname}?t={int(time.time())}",
+                        headers={"User-Agent": f"WiiU-Transfer-Tools-PC/{APP_VERSION}"},
+                    )
+                    with urllib.request.urlopen(req, timeout=12) as resp:
+                        content = resp.read()
+                    if len(content) > 128:
+                        (self.base_dir / fname).write_bytes(content)
+                        ok_count += 1
+            except Exception as exc:
+                if self.root.winfo_exists():
+                    self.root.after(
+                        0,
+                        lambda: (
+                            var_status.set(f"Error al actualizar desde GitHub: {exc}"),
+                            lbl.configure(fg="#FF5C6C"),
+                        ),
+                    )
+                return
+
+            def done_ui() -> None:
+                if ok_count == len(files):
+                    var_status.set("¡Programa PC actualizado! Reinicia la aplicación para aplicar cambios.")
+                    lbl.configure(fg=COL_GREEN_HI)
+                    self._enqueue_log("OK", "Programa PC actualizado correctamente desde GitHub.")
+                else:
+                    var_status.set("No se pudieron descargar todos los archivos desde GitHub.")
+                    lbl.configure(fg=COL_AMBER_TX)
+
+            if self.root.winfo_exists():
+                self.root.after(0, done_ui)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _download_wuhb_from_github(self, var_status: tk.StringVar, lbl: tk.Label) -> None:
+        save_path = filedialog.asksaveasfilename(
+            title="Guardar WiiU_Transfer.wuhb (Copia este archivo en SD:/wiiu/apps/)",
+            initialdir=str(self.base_dir),
+            initialfile="WiiU_Transfer.wuhb",
+            defaultextension=".wuhb",
+            filetypes=[("Aplicación Wii U (.wuhb)", "*.wuhb"), ("Todos los archivos", "*.*")],
+        )
+        if not save_path:
+            return
+
+        var_status.set("Descargando WiiU_Transfer.wuhb desde GitHub...")
+        lbl.configure(fg=COL_CYAN_HI)
+
+        def worker() -> None:
+            try:
+                req = urllib.request.Request(
+                    f"{self._remote_wuhb_url}?t={int(time.time())}",
+                    headers={"User-Agent": f"WiiU-Transfer-Tools-PC/{APP_VERSION}"},
+                )
+                with urllib.request.urlopen(req, timeout=25) as resp:
+                    blob = resp.read()
+                Path(save_path).write_bytes(blob)
+                if self.root.winfo_exists():
+                    self.root.after(
+                        0,
+                        lambda: (
+                            var_status.set(f"WiiU_Transfer.wuhb guardado ({format_bytes(len(blob))})"),
+                            lbl.configure(fg=COL_GREEN_HI),
+                            self._enqueue_log("OK", f"App Wii U descargada en: {save_path}"),
+                        ),
+                    )
+            except Exception as exc:
+                if self.root.winfo_exists():
+                    self.root.after(
+                        0,
+                        lambda: (
+                            var_status.set(f"No se pudo descargar WiiU_Transfer.wuhb: {exc}"),
+                            lbl.configure(fg="#FF5C6C"),
+                        ),
+                    )
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def on_close(self) -> None:
         self.server.stop()
+        if self.root.winfo_exists():
+            self.root.destroy()
 
 
 def main() -> None:
-    api = WebViewApi()
-    win = webview.create_window(
-        title=f"Wii U Transfer Tools v{APP_VERSION} — PC (WebView2)",
-        html=HTML_UI,
-        js_api=api,
-        width=1080,
-        height=730,
-        min_size=(920, 630),
-        background_color="#0F141B",
-    )
-    api.window = win
-    win.events.closed += api.shutdown
-    webview.start(gui="edgechromium" if sys.platform.startswith("win") else None, debug=False)
+    root = tk.Tk()
+    WiiUTransferApp(root)
+    root.mainloop()
 
 
 if __name__ == "__main__":
