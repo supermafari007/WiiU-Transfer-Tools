@@ -105,6 +105,8 @@ public class MainActivity extends Activity {
     private final List<NfsaTransferServer.WupPackage> packages = new ArrayList<NfsaTransferServer.WupPackage>();
     private final Set<String> markedNames = new HashSet<String>();
     private NfsaTransferServer server;
+    private UsbAoaServer aoaServer;
+    private String aoaStatusMsg = "";
     private WifiManager.WifiLock wifiLock;
     private PowerManager.WakeLock wakeLock;
 
@@ -206,12 +208,50 @@ public class MainActivity extends Activity {
             }
         });
 
+        aoaServer = new UsbAoaServer(this, activeFolder, new UsbAoaServer.Listener() {
+            @Override
+            public void onConnectionChanged(final boolean isConn, final String statusText) {
+                uiHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        aoaStatusMsg = (statusText != null) ? statusText : "";
+                        updateConnectionCardUi();
+                        updateBottomSummaryUi();
+                    }
+                });
+            }
+
+            @Override
+            public void onTransferActivity(final String currentFile, final long totalBytesSent) {
+                uiHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (isUsbMtpTab && bottomSummarySub != null) {
+                            bottomSummarySub.setText("Enviando por USB: " + currentFile +
+                                    "  \u2022  Total: " + NfsaTransferServer.formatBytes(totalBytesSent));
+                        }
+                    }
+                });
+            }
+        });
+        aoaServer.register();
+
         setContentView(buildRootLayout());
         ensureStoragePermission();
         prepareDefaultDirectory();
         refreshPackages();
         updateConnectionCardUi();
+        aoaServer.handleIntent(getIntent());
         checkForUpdatesInBackground(false);
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        if (aoaServer != null) {
+            aoaServer.handleIntent(intent);
+        }
     }
 
     @Override
@@ -223,6 +263,9 @@ public class MainActivity extends Activity {
             usbConfigured = stickyUsb.getBooleanExtra("configured", false);
             usbMtpEnabled = stickyUsb.getBooleanExtra("mtp", false) || stickyUsb.getBooleanExtra("ptp", false);
             updateConnectionCardUi();
+        }
+        if (aoaServer != null) {
+            aoaServer.probeExistingAccessories();
         }
         uiHandler.post(uiPollRunnable);
     }
@@ -241,6 +284,9 @@ public class MainActivity extends Activity {
     protected void onDestroy() {
         super.onDestroy();
         releaseNetworkLocks();
+        if (aoaServer != null) {
+            aoaServer.unregisterAndClose();
+        }
         if (server != null) {
             server.stop();
         }
@@ -885,22 +931,25 @@ public class MainActivity extends Activity {
         String ip = NfsaTransferServer.getLocalIpAddress();
 
         if (isUsbMtpTab) {
-            connTagText.setText("CONECTAR POR CABLE USB A LA WII U");
-            if (usbDataConnected && usbConfigured && usbMtpEnabled) {
-                connTitleText.setText("Conectado por USB a la Wii U (Transferencia activa)");
-                connSubText.setText("Tu selecci\u00f3n se sincroniza sola. En Wii U elige 'Modo USB' y pulsa [Y]");
+            boolean aoaConn = (aoaServer != null && aoaServer.isConnected());
+            connTagText.setText("CONECTAR POR CABLE USB DIRECTO (AOA)");
+            if (aoaConn) {
+                connTitleText.setText("Conectado por USB directo a la Wii U");
+                connSubText.setText("Canal directo activo (sin Depuraci\u00f3n USB). En Wii U pulsa [Y] o [A] para instalar.");
                 headerPillLayout.setBackground(roundedShape(COL_GREEN, dp(14), 0, 0));
                 headerPillDot.setBackground(circleShape(Color.parseColor("#B4FFD2")));
                 headerPillText.setText("Cable Listo");
             } else if (usbDataConnected) {
-                connTitleText.setText("Cable conectado: activa 'Transferencia de archivos'");
-                connSubText.setText("Toca 'Ajustes USB' abajo y selecciona 'Transferencia de archivos'");
+                connTitleText.setText("Cable USB detectado  \u2022  Pulsa [Y] en Wii U");
+                connSubText.setText(aoaStatusMsg.isEmpty()
+                        ? "En tu Wii U elige 'Modo USB', pulsa [Y] y toca Aceptar si sale un aviso USB."
+                        : aoaStatusMsg);
                 headerPillLayout.setBackground(roundedShape(COL_AMBER_BG, dp(14), dp(1), COL_AMBER_BD));
                 headerPillDot.setBackground(circleShape(COL_AMBER_TX));
-                headerPillText.setText("Activa USB");
+                headerPillText.setText("Esperando Wii U");
             } else {
                 connTitleText.setText("Conecta el celular al USB frontal de la Wii U");
-                connSubText.setText("Al conectar elige 'Transferencia de archivos' y en Wii U 'Modo USB'");
+                connSubText.setText("No necesitas activar Depuraci\u00f3n USB. Solo conecta el cable y pulsa [Y] en Wii U.");
                 headerPillLayout.setBackground(roundedShape(COL_PILL_OFF, dp(14), 0, 0));
                 headerPillDot.setBackground(circleShape(COL_MUTED));
                 headerPillText.setText("Sin Conexi\u00f3n");
@@ -940,12 +989,13 @@ public class MainActivity extends Activity {
                 NfsaTransferServer.formatBytes(markedBytes) + ")  \u2022  " + modeLabel);
 
         if (isUsbMtpTab) {
-            btnPrimaryAction.setText("Ajustes USB del Celular");
-            btnPrimaryAction.setBackground(roundedShape(COL_BTN_OFF, dp(10), dp(1), COL_CYAN));
+            boolean aoaConn = (aoaServer != null && aoaServer.isConnected());
+            btnPrimaryAction.setText(aoaConn ? "Conexi\u00f3n USB Directa Activa" : "Conectar USB Directo");
+            btnPrimaryAction.setBackground(roundedShape(aoaConn ? COL_GREEN : COL_CYAN, dp(10), 0, 0));
             btnSecondaryAction.setVisibility(View.GONE);
-            bottomSummarySub.setText(usbDataConnected && usbConfigured && usbMtpEnabled
-                    ? "Conectado y sincronizado. Pulsa [Y] en tu Wii U para instalar."
-                    : "Solo selecciona tus juegos arriba y conecta el cable USB a tu Wii U.");
+            bottomSummarySub.setText(aoaConn
+                    ? "Conectado y sincronizado. En Wii U pulsa [Y] para listar y [A] para instalar."
+                    : "Selecciona tus juegos arriba, conecta el cable USB y pulsa [Y] en tu Wii U.");
         } else {
             boolean netRunning = (server != null && server.isRunning());
             btnPrimaryAction.setText(netRunning
@@ -972,10 +1022,21 @@ public class MainActivity extends Activity {
             toggleNetworkServer();
             return;
         }
-        openUsbSettings();
+        if (aoaServer != null) {
+            aoaServer.probeExistingAccessories();
+            if (aoaServer.isConnected()) {
+                Toast.makeText(this, "USB directo ya est\u00e1 conectado a tu Wii U", Toast.LENGTH_SHORT).show();
+            } else {
+                Toast.makeText(this, "En tu Wii U elige 'Modo USB' y pulsa [Y]", Toast.LENGTH_LONG).show();
+            }
+        }
     }
 
     private void syncQueueToUsbAutomatically() {
+        if (aoaServer != null) {
+            aoaServer.setRootDir(activeFolder);
+            aoaServer.setMarkedNames(markedNames);
+        }
         final File folderSnap = activeFolder;
         final List<File> selectedDirs = new ArrayList<File>();
         final List<String> selectedNames = new ArrayList<String>();

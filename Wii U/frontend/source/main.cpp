@@ -48,7 +48,7 @@
 #include "audio_player.hpp"
 #include "ui_canvas.hpp"
 #include "usb_fat_reader.hpp"
-#include "usb_mtp_reader.hpp"
+#include "usb_aoa_reader.hpp"
 
 namespace {
 
@@ -164,10 +164,10 @@ struct AppState {
     std::string usbFatDevPath;
     usbfat::UsbFatVolume usbFat;
 
-    std::vector<usbmtp::MtpPkg> mtpPkgs;
+    std::vector<usbaoa::AoaPkg> mtpPkgs;
     bool mtpConnected = false;
     std::string mtpDeviceName;
-    usbmtp::UsbMtpDevice mtpDev;
+    usbaoa::UsbAoaDevice mtpDev;
 
     int selectedIdx = 0;
     int scrollOffset = 0;
@@ -1100,10 +1100,9 @@ bool ScanUsbPendrive(AppState& st) {
 
 // Autodetección unificada para "Modo USB" (Memoria USB exFAT/FAT32/NTFS/FAT o Celular Android MTP)
 bool ScanUnifiedUsb(AppState& st) {
-    // Si el celular Android ya tiene una sesion MTP viva, re-escanear SIN desconectar ni reiniciar endpoints
-    // (evita que FunctionFS de Android 14/15 cuelgue la conexion al pulsar [Y])
+    // Si el celular Android ya tiene una sesion AOA viva, re-escanear SIN desconectar
     if (st.mtpConnected && st.mtpDev.IsConnected()) {
-        std::vector<usbmtp::MtpPkg> refreshedPkgs;
+        std::vector<usbaoa::AoaPkg> refreshedPkgs;
         std::string scanDiag;
         if (st.mtpDev.ScanWupPackages(refreshedPkgs, scanDiag)) {
             st.source = PkgSource::AndroidMtp;
@@ -1114,7 +1113,7 @@ bool ScanUnifiedUsb(AppState& st) {
             st.statusIsSuccess = true;
             st.statusLine = "Celular conectado (" + st.mtpDeviceName + ")";
             st.subStatusLine = st.mtpPkgs.empty()
-                ? "Pon tus juegos en /WiiU_Transfer o /Download del celular."
+                ? "Elige tu carpeta de juegos en la App Android."
                 : (std::to_string(st.mtpPkgs.size()) + " juego(s) listo(s) en el celular.");
             return true;
         }
@@ -1871,7 +1870,7 @@ bool RunSinglePackageInstall(wutui::UiCanvas& ui,
     std::string pkgName;
     uint64_t pkgTotalBytes = 0;
     usbfat::UsbPkg usbPkgCopy;
-    usbmtp::MtpPkg mtpPkgCopy;
+    usbaoa::AoaPkg mtpPkgCopy;
     if (fromUsb) {
         usbPkgCopy = st.usbPkgs[pkgIdx];
         pkgName = usbPkgCopy.name;
@@ -2146,10 +2145,20 @@ bool RunSinglePackageInstall(wutui::UiCanvas& ui,
 
         uint64_t streamSize = 0;
         usbfat::UsbFatVolume::FileStream usbStream;
-        usbmtp::UsbMtpDevice::FileStream mtpStream;
+        usbaoa::UsbAoaDevice::FileStream mtpStream;
         if (fromMtp) {
             streamSize = fileSize;
-            mtpStream.Open(&st.mtpDev, mtpPkgCopy.files[fi].objectHandle, fileSize);
+            if (!mtpStream.Open(&st.mtpDev, mtpPkgCopy.files[fi].fullRel, fileSize)) {
+                ok = false;
+                wctx.cancelRequested = true;
+                st.statusLine = "Error abriendo archivo en el Celular.";
+                if (!st.mtpDev.LastError().empty()) {
+                    st.subStatusLine = st.mtpDev.LastError();
+                }
+                if (useFsa) FSACloseFile(st.fsaHandle, wctx.fsaFile);
+                else std::fclose(wctx.stdioFile);
+                break;
+            }
         } else if (fromUsb) {
             streamSize = fileSize;
             usbStream.Open(&st.usbFat, usbPkgCopy.files[fi]);
