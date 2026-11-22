@@ -268,6 +268,8 @@ public class MainActivity extends Activity {
         if (aoaServer != null) {
             aoaServer.probeExistingAccessories();
         }
+        // Siempre re-escanear al abrir o volver a la app para mostrar solo los juegos reales actuales
+        refreshPackages();
         uiHandler.post(uiPollRunnable);
     }
 
@@ -552,23 +554,26 @@ public class MainActivity extends Activity {
         pkgCard.setPadding(dp(14), dp(12), dp(14), dp(12));
         pkgCard.setBackground(roundedShape(COL_CARD, dp(16), dp(1), COL_BORDER));
 
-        LinearLayout pkgHdr = new LinearLayout(this);
-        pkgHdr.setOrientation(LinearLayout.HORIZONTAL);
-        pkgHdr.setGravity(Gravity.CENTER_VERTICAL);
-
         pkgHeaderCountText = new TextView(this);
         pkgHeaderCountText.setText("Juegos en el celular (0)");
         pkgHeaderCountText.setTextColor(COL_TEXT);
         pkgHeaderCountText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
         pkgHeaderCountText.setTypeface(Typeface.DEFAULT_BOLD);
-        pkgHdr.addView(pkgHeaderCountText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        pkgCard.addView(pkgHeaderCountText);
+
+        LinearLayout pkgBtnRow = new LinearLayout(this);
+        pkgBtnRow.setOrientation(LinearLayout.HORIZONTAL);
+        pkgBtnRow.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams brLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        brLp.topMargin = dp(8);
 
         TextView btnAddGame = new TextView(this);
         btnAddGame.setText("+ A\u00f1adir Juego");
         btnAddGame.setTextColor(COL_TEXT);
         btnAddGame.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
         btnAddGame.setTypeface(Typeface.DEFAULT_BOLD);
-        btnAddGame.setPadding(dp(10), dp(6), dp(10), dp(6));
+        btnAddGame.setGravity(Gravity.CENTER);
+        btnAddGame.setPadding(dp(10), dp(7), dp(10), dp(7));
         btnAddGame.setBackground(roundedShape(COL_BTN_OFF, dp(8), dp(1), COL_BORDER));
         btnAddGame.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -576,16 +581,38 @@ public class MainActivity extends Activity {
                 showAddGameDialog();
             }
         });
-        LinearLayout.LayoutParams addLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        LinearLayout.LayoutParams addLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.15f);
         addLp.rightMargin = dp(6);
-        pkgHdr.addView(btnAddGame, addLp);
+        pkgBtnRow.addView(btnAddGame, addLp);
+
+        TextView btnRefreshList = new TextView(this);
+        btnRefreshList.setText("Actualizar lista");
+        btnRefreshList.setTextColor(Color.WHITE);
+        btnRefreshList.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+        btnRefreshList.setTypeface(Typeface.DEFAULT_BOLD);
+        btnRefreshList.setGravity(Gravity.CENTER);
+        btnRefreshList.setPadding(dp(10), dp(7), dp(10), dp(7));
+        btnRefreshList.setBackground(roundedShape(COL_CYAN_LT, dp(8), dp(1), COL_CYAN));
+        btnRefreshList.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                refreshPackages();
+                Toast.makeText(MainActivity.this,
+                        "Lista actualizada (" + packages.size() + " juego" + (packages.size() == 1 ? "" : "s") + ")",
+                        Toast.LENGTH_SHORT).show();
+            }
+        });
+        LinearLayout.LayoutParams refLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.15f);
+        refLp.rightMargin = dp(6);
+        pkgBtnRow.addView(btnRefreshList, refLp);
 
         btnAllToggle = new TextView(this);
         btnAllToggle.setText("Todos");
         btnAllToggle.setTextColor(COL_CYAN_DK);
         btnAllToggle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
         btnAllToggle.setTypeface(Typeface.DEFAULT_BOLD);
-        btnAllToggle.setPadding(dp(12), dp(6), dp(12), dp(6));
+        btnAllToggle.setGravity(Gravity.CENTER);
+        btnAllToggle.setPadding(dp(10), dp(7), dp(10), dp(7));
         btnAllToggle.setBackground(roundedShape(COL_CYAN_LT, dp(8), dp(1), COL_CYAN));
         btnAllToggle.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -593,8 +620,8 @@ public class MainActivity extends Activity {
                 toggleSelectAll();
             }
         });
-        pkgHdr.addView(btnAllToggle);
-        pkgCard.addView(pkgHdr);
+        pkgBtnRow.addView(btnAllToggle, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 0.75f));
+        pkgCard.addView(pkgBtnRow, brLp);
 
         pkgListContainer = new LinearLayout(this);
         pkgListContainer.setOrientation(LinearLayout.VERTICAL);
@@ -796,6 +823,13 @@ public class MainActivity extends Activity {
         }
         packages.clear();
         packages.addAll(scanned);
+
+        // Purgar cualquier juego que ya haya sido borrado del celular
+        Set<String> existingNames = new HashSet<String>();
+        for (NfsaTransferServer.WupPackage p : packages) {
+            existingNames.add(p.name);
+        }
+        markedNames.retainAll(existingNames);
 
         if (markedNames.isEmpty()) {
             for (NfsaTransferServer.WupPackage p : packages) {
