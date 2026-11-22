@@ -38,8 +38,9 @@ constexpr uint16_t kMtpRespOpNotSupported       = 0x2005;
 
 constexpr uint16_t kMtpFormatAssociation = 0x3001; // Carpeta / Directorio
 
-constexpr uint32_t kMtpDmaBufSize   = 256 * 1024;  // 256 KB por transaccion USB Bulk
-constexpr uint32_t kMtpPartialChunk = 240 * 1024;  // 240 KB de carga util por GetPartialObject
+constexpr uint32_t kMtpDmaBufSize   = 64 * 1024;   // 64 KB por transaccion USB Bulk (limite seguro en IOS-USB/nsysuhs)
+constexpr uint32_t kMtpPartialChunk = 60 * 1024;   // 60 KB de carga util por GetPartialObject
+constexpr int32_t  kMtpMaxProfiles  = 32;          // Hasta 32 interfaces USB (soporta telefonos compuestos Motorola/Samsung/Xiaomi)
 
 struct MtpFile {
     std::string subPath;
@@ -205,12 +206,14 @@ public:
         outDiag.clear();
 
         if (!EnsureBuffers()) {
-            outDiag = "Sin memoria para driver USB MTP.";
+            outDiag = "Sin memoria para driver USB del celular.";
             return false;
         }
 
-        // Escanear controladores USB host de la Wii U (0 y 1)
-        for (uint32_t ctrl = 0; ctrl < 2; ++ctrl) {
+        std::string lastSeenUsb;
+
+        // Escanear los 3 controladores USB host de la Wii U (0=EHCI High-Speed, 1 y 2=OHCI)
+        for (uint32_t ctrl = 0; ctrl < 3; ++ctrl) {
             std::memset(&uhsHandle_, 0, sizeof(uhsHandle_));
             std::memset(&uhsConfig_, 0, sizeof(uhsConfig_));
             std::memset(uhsCfgBuf_, 0, 0x1400);
@@ -226,65 +229,80 @@ public:
 
             UhsInterfaceFilter filter{};
             filter.match_params = MATCH_ANY;
-            std::memset(profilesBuf_, 0, sizeof(UhsInterfaceProfile) * 8);
+            std::memset(profilesBuf_, 0, sizeof(UhsInterfaceProfile) * kMtpMaxProfiles);
 
-            int32_t numIfs = static_cast<int32_t>(UhsQueryInterfaces(&uhsHandle_, &filter, profilesBuf_, 8));
+            int32_t numIfs = static_cast<int32_t>(
+                UhsQueryInterfaces(&uhsHandle_, &filter, profilesBuf_, kMtpMaxProfiles));
             if (numIfs <= 0) {
                 UhsClientClose(&uhsHandle_);
                 uhsOpened_ = false;
                 continue;
             }
 
-            int32_t count = std::min<int32_t>(numIfs, 8);
+            int32_t count = std::min<int32_t>(numIfs, kMtpMaxProfiles);
             for (int32_t i = 0; i < count; ++i) {
                 const UhsInterfaceProfile& prof = profilesBuf_[i];
-                // Evitar explícitamente USB Mass Storage (0x08 = HDD de Wii U o Pendrive) y Hubs (0x09)
-                if (prof.if_desc.bInterfaceClass == USBCLASS_STORAGE ||
-                    prof.if_desc.bInterfaceClass == 0x09 ||
-                    prof.if_desc.bInterfaceClass == USBCLASS_HID ||
-                    prof.if_desc.bInterfaceClass == USBCLASS_AUDIO) {
+                uint8_t cls = prof.if_desc.bInterfaceClass;
+
+                // Evitar explicitamente discos/memorias USB (0x08), hubs (0x09), mandos HID (0x03), audio (0x01), video (0x0E)
+                if (cls == USBCLASS_STORAGE || cls == 0x09 || cls == USBCLASS_HID ||
+                    cls == USBCLASS_AUDIO || cls == 0x0E || cls == 0x07 || cls == 0xE0) {
                     continue;
                 }
 
-                // MTP en Android se anuncia como Still Image Capture (Class 0x06, SubClass 0x01, Proto 0x01)
-                // o Vendor Specific (Class 0xFF) con endpoints Bulk IN + Bulk OUT
-                bool isPtpClass = (prof.if_desc.bInterfaceClass == 0x06 &&
-                                   prof.if_desc.bInterfaceSubClass == 0x01);
-                bool isVendorMtp = (prof.if_desc.bInterfaceClass == 0xFF);
-                if (!isPtpClass && !isVendorMtp) continue;
+                // MTP en Android se anuncia como Still Image (0x06) o Vendor Specific (0xFF, ej. Motorola/Samsung/Qualcomm)
+                bool isMtpCandidate = (cls == 0x06 || cls == 0xFF || cls == 0x00);
+                if (!isMtpCandidate) continue;
 
-                uint8_t bulkIn = 0;
-                uint8_t bulkOut = 0;
+                uint8_t bulkInNum = 0;
+                uint8_t bulkOutNum = 0;
                 uint32_t epMask = 0;
 
                 for (int e = 0; e < 16; ++e) {
                     const auto& ep = prof.in_endpoints[e];
                     if (ep.bLength >= 7 && (ep.bmAttributes & 0x03u) == 0x02u && (ep.bEndpointAddress & 0x80u) != 0) {
-                        bulkIn = ep.bEndpointAddress;
-                        epMask |= (1u << ((ep.bEndpointAddress & 0x0Fu) + 16));
-                        break;
+                        uint8_t epNum = static_cast<uint8_t>(ep.bEndpointAddress & 0x0Fu);
+                        if (epNum != 0) {
+                            bulkInNum = epNum; // nsysuhs espera el numero de endpoint (1..15), NO 0x81!
+                            epMask |= (1u << (epNum + 16));
+                            break;
+                        }
                     }
                 }
                 for (int e = 0; e < 16; ++e) {
                     const auto& ep = prof.out_endpoints[e];
                     if (ep.bLength >= 7 && (ep.bmAttributes & 0x03u) == 0x02u && (ep.bEndpointAddress & 0x80u) == 0) {
-                        bulkOut = ep.bEndpointAddress;
-                        epMask |= (1u << (ep.bEndpointAddress & 0x0Fu));
-                        break;
+                        uint8_t epNum = static_cast<uint8_t>(ep.bEndpointAddress & 0x0Fu);
+                        if (epNum != 0) {
+                            bulkOutNum = epNum;
+                            epMask |= (1u << epNum);
+                            break;
+                        }
                     }
                 }
 
-                if (bulkIn == 0 || bulkOut == 0) continue;
+                if (bulkInNum == 0 || bulkOutNum == 0) continue;
+
+                char seenBuf[48];
+                std::snprintf(seenBuf, sizeof(seenBuf), "%04X:%04X (cls %02X)",
+                              prof.dev_desc.idVendor, prof.dev_desc.idProduct, cls);
+                lastSeenUsb = seenBuf;
 
                 if (UhsAcquireInterface(&uhsHandle_, prof.if_handle, nullptr, OnInterfaceEvent) != UHS_STATUS_OK) {
                     continue;
                 }
                 ifAcquired_ = true;
                 ifHandle_ = prof.if_handle;
-                epIn_ = bulkIn;
-                epOut_ = bulkOut;
+                epIn_ = bulkInNum;
+                epOut_ = bulkOutNum;
 
-                UhsAdministerEndpoint(&uhsHandle_, ifHandle_, UHS_ADMIN_EP_ENABLE, epMask, 4, kMtpDmaBufSize);
+                // Habilitar endpoints con tamano seguro en IOS-USB (64 KB, fallback 16 KB)
+                UHSStatus epSt = UhsAdministerEndpoint(&uhsHandle_, ifHandle_, UHS_ADMIN_EP_ENABLE, epMask, 1, kMtpDmaBufSize);
+                if (epSt != UHS_STATUS_OK) {
+                    epSt = UhsAdministerEndpoint(&uhsHandle_, ifHandle_, UHS_ADMIN_EP_ENABLE, epMask, 1, 16 * 1024);
+                }
+                UhsClearEndpointHalt(&uhsHandle_, ifHandle_, epIn_, ENDPOINT_TRANSFER_IN);
+                UhsClearEndpointHalt(&uhsHandle_, ifHandle_, epOut_, ENDPOINT_TRANSFER_OUT);
 
                 txId_ = 1;
                 sessionOpen_ = false;
@@ -292,16 +310,24 @@ public:
 
                 uint32_t sessParams[1] = {1u};
                 uint16_t respCode = 0;
-                if (!SendSimpleCommand(kMtpOpOpenSession, sessParams, 1, respCode) ||
-                    (respCode != kMtpRespOk && respCode != kMtpRespSessionAlreadyOpen)) {
+                bool openOk = SendSimpleCommand(kMtpOpOpenSession, sessParams, 1, respCode) &&
+                              (respCode == kMtpRespOk || respCode == kMtpRespSessionAlreadyOpen);
+                if (!openOk) {
+                    // Si habia una sesion colgada en el telefono, cerrarla y reintentar una vez
+                    SendSimpleCommand(kMtpOpCloseSession, nullptr, 0, respCode);
+                    txId_ = 1;
+                    openOk = SendSimpleCommand(kMtpOpOpenSession, sessParams, 1, respCode) &&
+                             (respCode == kMtpRespOk || respCode == kMtpRespSessionAlreadyOpen);
+                }
+                if (!openOk) {
                     UhsReleaseInterface(&uhsHandle_, ifHandle_, false);
                     ifAcquired_ = false;
                     continue;
                 }
                 sessionOpen_ = true;
 
-                char vidPid[32];
-                std::snprintf(vidPid, sizeof(vidPid), "Android MTP (%04X:%04X)",
+                char vidPid[40];
+                std::snprintf(vidPid, sizeof(vidPid), "Android USB (%04X:%04X)",
                               prof.dev_desc.idVendor, prof.dev_desc.idProduct);
                 deviceName_ = vidPid;
 
@@ -319,7 +345,11 @@ public:
             uhsOpened_ = false;
         }
 
-        outDiag = "Sin movil MTP. Activa 'Transferencia de archivos' en Android.";
+        if (!lastSeenUsb.empty()) {
+            outDiag = "USB " + lastSeenUsb + " detectado: desbloquea y elige 'Transferencia de archivos'.";
+        } else {
+            outDiag = "Sin celular USB. Activa 'Transferencia de archivos' en Android.";
+        }
         return false;
     }
 
@@ -399,7 +429,7 @@ private:
         }
         if (!profilesBuf_) {
             profilesBuf_ = static_cast<UhsInterfaceProfile*>(
-                MEMAllocFromDefaultHeapEx(sizeof(UhsInterfaceProfile) * 8, 0x40));
+                MEMAllocFromDefaultHeapEx(sizeof(UhsInterfaceProfile) * kMtpMaxProfiles, 0x40));
         }
         return dmaBuf_ && uhsCfgBuf_ && profilesBuf_;
     }

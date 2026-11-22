@@ -32,7 +32,7 @@ from transfer_server import (
 )
 from ui_assets import ensure_pc_assets, make_rounded_corners_9slice, make_rounded_rect_img
 
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.0.1"
 GITHUB_REPO_URL = "https://github.com/supermafari007/WiiU-Transfer-Tools"
 VERSION_JSON_URL = "https://raw.githubusercontent.com/supermafari007/WiiU-Transfer-Tools/main/version.json"
 RAW_PC_BASE_URL = "https://raw.githubusercontent.com/supermafari007/WiiU-Transfer-Tools/main/PC"

@@ -58,11 +58,11 @@ constexpr uint32_t USB_SLICE_SIZE    = 1024 * 1024;     // 1 MB por lectura USB 
 constexpr uint32_t NET_SLICE_SIZE    = 512 * 1024;      // 512 KB por slice TCP con SO_RUSRBUF activo (Wi-Fi / LAN USB)
 constexpr uint32_t FSA_WRITE_CHUNK   = 1024 * 1024;     // 1 MB por llamada FSAWriteFile
 constexpr uint32_t STDIO_BUF_SIZE    = 512 * 1024;      // 512 KB de setvbuf para escritura rápida en SD
-constexpr uint32_t SOMEMOPT_BUF_SIZE = 0x300000;        // 3 MB máximos permitidos por nsysnet para buffers TCP (Wi-Fi y LAN USB)
+constexpr uint32_t SOMEMOPT_BUF_SIZE = 0x200000;        // 2 MB para pool TCP nsysnet (Wi-Fi y LAN USB a maxima velocidad)
 constexpr uint32_t SOMEMOPT_STACK_SZ = 16 * 1024;
 constexpr uint32_t WRITER_STACK_SIZE = 32 * 1024;
 constexpr uint32_t UI_REFRESH_MS     = 450;
-constexpr const char* APP_VERSION_STR = "v2.0.0";
+constexpr const char* APP_VERSION_STR = "v2.0.1";
 
 wutaudio::AudioManager* gAudioMgr = nullptr;
 
@@ -89,9 +89,10 @@ public:
         OSThread* t = thread_;
         OSDetachThread(t);
         OSResumeThread(t);
-        OSSleepTicks(OSMillisecondsToTicks(25));
+        // Esperar confirmacion real de nsysnet antes de abrir sockets con SO_RUSRBUF
+        int waitRes = somemopt(SOMEMOPT_REQUEST_WAIT_FOR_INIT, nullptr, 0, SOMEMOPT_FLAGS_NONE);
         initialized_ = true;
-        ready_ = true;
+        ready_ = (waitRes >= 0);
     }
 
     static bool IsReady() { return ready_; }
@@ -760,29 +761,29 @@ bool RecvExact(int sock, void* data, size_t len, int timeoutMs = 15000, NetCance
     OSTime lastCheck = lastActivity;
 
     while (got < len) {
-        OSTime now = OSGetSystemTime();
-        if (OSTicksToMilliseconds(now - lastCheck) >= 40) {
-            lastCheck = now;
-            if (!CheckNetAlive(ctx)) return false;
-        }
-
-        size_t want = std::min<size_t>(len - got, 256 * 1024);
+        size_t want = std::min<size_t>(len - got, 128 * 1024);
         ssize_t n = recv(sock, ptr + got, want, MSG_DONTWAIT);
         if (n > 0) {
             got += static_cast<size_t>(n);
             lastActivity = OSGetSystemTime();
+            if (OSTicksToMilliseconds(lastActivity - lastCheck) >= 180) {
+                lastCheck = lastActivity;
+                if (!CheckNetAlive(ctx)) return false;
+            }
             continue;
         }
         if (n == 0) return false;
         if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR || errno == 6) {
-            if (!CheckNetAlive(ctx)) return false;
-            lastCheck = OSGetSystemTime();
-            if (OSTicksToMilliseconds(lastCheck - lastActivity) >= static_cast<uint64_t>(std::max(0, timeoutMs))) {
+            OSTime now = OSGetSystemTime();
+            if (OSTicksToMilliseconds(now - lastCheck) >= 180) {
+                lastCheck = now;
+                if (!CheckNetAlive(ctx)) return false;
+            }
+            if (OSTicksToMilliseconds(now - lastActivity) >= static_cast<uint64_t>(std::max(0, timeoutMs))) {
                 return false;
             }
-
             struct pollfd pfd{sock, POLLIN, 0};
-            int pr = poll(&pfd, 1, 10);
+            int pr = poll(&pfd, 1, 100);
             if (pr < 0 && errno != EINTR && errno != EAGAIN) return false;
             continue;
         }
@@ -803,21 +804,16 @@ int ConnectTcp(const std::string& ip, uint16_t port, int timeoutMs = 4000, NetCa
     if (SocketMemoryBooster::IsReady()) {
         setsockopt(sock, SOL_SOCKET, SO_RUSRBUF, &yes, sizeof(yes));
     }
-    int rcvBuf = 512 * 1024;
+    int rcvBuf = 256 * 1024;
     if (setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &rcvBuf, sizeof(rcvBuf)) < 0) {
-        rcvBuf = 256 * 1024;
+        rcvBuf = 128 * 1024;
         if (setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &rcvBuf, sizeof(rcvBuf)) < 0) {
-            rcvBuf = 128 * 1024;
-            if (setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &rcvBuf, sizeof(rcvBuf)) < 0) {
-                rcvBuf = 65536;
-                setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &rcvBuf, sizeof(rcvBuf));
-            }
+            rcvBuf = 65536;
+            setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &rcvBuf, sizeof(rcvBuf));
         }
     }
-    int sndBuf = 128 * 1024;
+    int sndBuf = 65536;
     setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &sndBuf, sizeof(sndBuf));
-    int maxSeg = 1460;
-    setsockopt(sock, SOL_TCP, TCP_MAXSEG, &maxSeg, sizeof(maxSeg));
     setsockopt(sock, SOL_TCP, TCP_NODELAY, &yes, sizeof(yes));
     setsockopt(sock, SOL_TCP, TCP_NOACKDELAY, &yes, sizeof(yes));
 
@@ -1159,7 +1155,9 @@ bool ScanUnifiedUsb(AppState& st) {
     st.statusIsError = true;
     st.statusIsSuccess = false;
     st.statusLine = "No se detecto Memoria USB ni Celular por USB.";
-    st.subStatusLine = "Soporta exFAT, FAT32, NTFS, FAT y Android. Pulsa [Y].";
+    st.subStatusLine = !mtpDiag.empty()
+        ? mtpDiag
+        : "Soporta exFAT, FAT32, NTFS, FAT y Android. Pulsa [Y].";
     return false;
 }
 
@@ -1415,7 +1413,7 @@ void DrawUI(wutui::UiCanvas& ui, const AppState& st) {
     ui.FillRect(0, 94, wutui::LOGICAL_W, 2, wutui::COL_CYAN);
     ui.DrawGamepadIcon(28, 10);
     ui.DrawText(146, 16, "Wii U Transfer Tools", wutui::COL_WHITE, wutui::FontId::Header);
-    ui.DrawText(146, 58, "por El Diuca  *  Ver. 2.0.0  *  Instalador de Juegos", wutui::COL_CYAN_SUB, wutui::FontId::Body);
+    ui.DrawText(146, 58, "por El Diuca  *  Ver. 2.0.1  *  Instalador de Juegos", wutui::COL_CYAN_SUB, wutui::FontId::Body);
 
     // Selector simplificado de 2 pestañas [X]: Modo USB | Modo Red (x=536..872)
     ui.FillRoundedRect(536, 24, 336, 48, 24, wutui::COL_PILL_OFF);

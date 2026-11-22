@@ -17,12 +17,14 @@ import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
 import android.media.MediaScannerConnection;
 import android.net.Uri;
+import android.net.wifi.WifiManager;
 import android.os.BatteryManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.provider.Settings;
 import android.text.TextUtils;
 import android.util.TypedValue;
@@ -69,7 +71,7 @@ import java.util.zip.ZipInputStream;
  */
 public class MainActivity extends Activity {
 
-    public static final String APP_VERSION = "2.0.0";
+    public static final String APP_VERSION = "2.0.1";
     public static final String GITHUB_REPO_URL = "https://github.com/supermafari007/WiiU-Transfer-Tools";
     public static final String VERSION_JSON_URL = "https://raw.githubusercontent.com/supermafari007/WiiU-Transfer-Tools/main/version.json";
     public static final String DEFAULT_APK_URL = "https://raw.githubusercontent.com/supermafari007/WiiU-Transfer-Tools/main/Android/WiiU_Transfer_Tools_Android.apk";
@@ -103,6 +105,8 @@ public class MainActivity extends Activity {
     private final List<NfsaTransferServer.WupPackage> packages = new ArrayList<NfsaTransferServer.WupPackage>();
     private final Set<String> markedNames = new HashSet<String>();
     private NfsaTransferServer server;
+    private WifiManager.WifiLock wifiLock;
+    private PowerManager.WakeLock wakeLock;
 
     private boolean isUsbMtpTab = true;
     private boolean usbPlugged = false;
@@ -221,6 +225,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        releaseNetworkLocks();
         if (server != null) {
             server.stop();
         }
@@ -1018,15 +1023,61 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void acquireNetworkLocks() {
+        try {
+            if (wifiLock == null) {
+                WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+                if (wm != null) {
+                    int mode = (Build.VERSION.SDK_INT >= 29)
+                            ? WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+                            : WifiManager.WIFI_MODE_FULL_HIGH_PERF;
+                    wifiLock = wm.createWifiLock(mode, "WiiUTransfer:WifiPerf");
+                    wifiLock.setReferenceCounted(false);
+                }
+            }
+            if (wifiLock != null && !wifiLock.isHeld()) {
+                wifiLock.acquire();
+            }
+        } catch (Exception ignored) {
+        }
+        try {
+            if (wakeLock == null) {
+                PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+                if (pm != null) {
+                    wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "WiiUTransfer:CpuPerf");
+                    wakeLock.setReferenceCounted(false);
+                }
+            }
+            if (wakeLock != null && !wakeLock.isHeld()) {
+                wakeLock.acquire(4 * 60 * 60 * 1000L);
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void releaseNetworkLocks() {
+        try {
+            if (wifiLock != null && wifiLock.isHeld()) wifiLock.release();
+        } catch (Exception ignored) {
+        }
+        try {
+            if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
+        } catch (Exception ignored) {
+        }
+    }
+
     private void toggleNetworkServer() {
         if (server.isRunning()) {
             server.stop();
+            releaseNetworkLocks();
         } else {
             try {
+                acquireNetworkLocks();
                 server.setRootDir(activeFolder);
                 server.setMarkedQueue(markedNames, true);
                 server.start();
             } catch (IOException e) {
+                releaseNetworkLocks();
                 Toast.makeText(this, "Error al compartir por Red: " + e.getMessage(), Toast.LENGTH_LONG).show();
             }
         }

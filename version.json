@@ -1,11 +1,11 @@
 {
-  "version": "2.0.0",
+  "version": "2.0.1",
   "release_date": "2026-11-22",
   "repo_url": "https://github.com/supermafari007/WiiU-Transfer-Tools",
-  "release_url": "https://github.com/supermafari007/WiiU-Transfer-Tools/releases/tag/v2.0.0",
-  "wiiu_wuhb_url": "https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.0/WiiU_Transfer.wuhb",
-  "android_apk_url": "https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.0/WiiU_Transfer_Tools_Android.apk",
-  "pc_zip_url": "https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.0/WiiU-Transfer-Tools-PC-v2.0.0.zip",
+  "release_url": "https://github.com/supermafari007/WiiU-Transfer-Tools/releases/tag/v2.0.1",
+  "wiiu_wuhb_url": "https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.1/WiiU_Transfer.wuhb",
+  "android_apk_url": "https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.1/WiiU_Transfer_Tools_Android.apk",
+  "pc_zip_url": "https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.1/WiiU-Transfer-Tools-PC-v2.0.1.zip",
   "pc_gui_url": "https://raw.githubusercontent.com/supermafari007/WiiU-Transfer-Tools/main/PC/wiiu_transfer_gui.py",
-  "notes": "Ver. 2.0.0: Memoria USB multi-formato (exFAT, FAT32, NTFS y FAT), Modo USB / Modo Red en lenguaje simple, instalador grafico para PC, soporte Android 9+ y actualizador conectado a GitHub."
+  "notes": "Ver. 2.0.1: Correccion critica USB Android MTP (endpoint UHS, 64 KB DMA y soporte Motorola/Samsung/Xiaomi) y aceleracion de Modo Red (somemopt + recv optimizado + WifiLock Android)."
 }
