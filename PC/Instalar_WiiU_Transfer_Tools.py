@@ -120,26 +120,29 @@ def run_uninstall_flow() -> None:
     root.withdraw()
     if not messagebox.askyesno(
         "Desinstalar Wii U Transfer Tools",
-        "¿Deseas desinstalar Wii U Transfer Tools de tu PC?\n\n"
-        "(Se eliminarán el programa, los accesos directos y la entrada en Windows; "
-        "si tienes juegos dentro de 'packages', esos archivos no se borrarán.)",
+        "¿Deseas desinstalar por completo Wii U Transfer Tools de tu PC?\n\n"
+        "Se eliminará todo lo relacionado con el programa: carpeta de instalación, "
+        "accesos directos, reglas del Firewall y entrada en Windows.",
     ):
         root.destroy()
         return
 
     install_dir = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
 
-    # Cerrar el programa si estuviera abierto
+    # Cerrar el programa si estuviera abierto (sin mostrar consola)
     _silent_run(["taskkill", "/F", "/IM", "WiiU_Transfer_Tools.exe"])
 
-    # Eliminar accesos directos
-    desktop_lnk = Path(os.environ.get("USERPROFILE", str(Path.home()))) / "Desktop" / "Wii U Transfer Tools.lnk"
-    if desktop_lnk.exists():
-        try:
-            desktop_lnk.unlink()
-        except Exception:
-            pass
+    # Eliminar accesos directos del Escritorio (local y OneDrive)
+    user_prof = Path(os.environ.get("USERPROFILE", str(Path.home())))
+    for desk in (user_prof / "Desktop", user_prof / "OneDrive" / "Desktop", Path.home() / "Desktop"):
+        lnk = desk / "Wii U Transfer Tools.lnk"
+        if lnk.exists():
+            try:
+                lnk.unlink()
+            except Exception:
+                pass
 
+    # Eliminar accesos directos del Menú Inicio
     start_progs = Path(os.environ.get("APPDATA", "")) / "Microsoft" / "Windows" / "Start Menu" / "Programs"
     for p in (start_progs / "Wii U Transfer Tools.lnk", start_progs / "Wii U Transfer Tools"):
         try:
@@ -150,36 +153,54 @@ def run_uninstall_flow() -> None:
         except Exception:
             pass
 
+    # Eliminar reglas del Firewall creadas por el instalador (sin consola)
+    for proto, port in (("TCP", 7331), ("UDP", 7332)):
+        _silent_run(
+            [
+                "netsh", "advfirewall", "firewall", "delete", "rule",
+                f"name=Wii U Transfer Tools ({proto} {port})",
+            ]
+        )
+
     # Eliminar entrada de "Aplicaciones instaladas" de Windows
     try:
         winreg.DeleteKey(winreg.HKEY_CURRENT_USER, UNINSTALL_REG_PATH)
     except Exception:
         pass
 
-    # Eliminar binario principal y assets
-    for fname in ("WiiU_Transfer_Tools.exe", "Iniciar_WiiU_Transfer_Tools.bat"):
-        fp = install_dir / fname
-        if fp.exists():
+    # Eliminar absolutamente todo el contenido de la carpeta de instalación (salvo este exe en ejecución)
+    self_exe = Path(sys.executable).resolve() if getattr(sys, "frozen", False) else None
+    if install_dir.exists() and install_dir.name.lower() == "wiiu_transfer_tools":
+        for child in list(install_dir.iterdir()):
+            if self_exe and child.resolve() == self_exe:
+                continue
             try:
-                fp.unlink()
+                if child.is_dir():
+                    shutil.rmtree(child, ignore_errors=True)
+                else:
+                    child.unlink()
             except Exception:
                 pass
-    assets_d = install_dir / "assets"
-    if assets_d.exists():
-        shutil.rmtree(assets_d, ignore_errors=True)
 
-    # Programar borrado del propio desinstalador al cerrar
-    if getattr(sys, "frozen", False):
-        self_exe = Path(sys.executable).resolve()
+    # Programar borrado total del propio desinstalador y la carpeta completa de forma 100% oculta
+    if getattr(sys, "frozen", False) and self_exe:
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = 0
+        if install_dir.name.lower() == "wiiu_transfer_tools":
+            cleanup_cmd = f'cmd /c ping 127.0.0.1 -n 3 >nul & del /f /q "{self_exe}" & rmdir /s /q "{install_dir}" 2>nul'
+        else:
+            cleanup_cmd = f'cmd /c ping 127.0.0.1 -n 3 >nul & del /f /q "{self_exe}"'
         subprocess.Popen(
-            f'cmd /c ping 127.0.0.1 -n 3 >nul & del /f /q "{self_exe}" & rmdir "{install_dir}" 2>nul',
+            cleanup_cmd,
             shell=True,
-            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+            creationflags=NO_WINDOW,
+            startupinfo=si,
         )
 
     messagebox.showinfo(
         "Desinstalación completada",
-        "Wii U Transfer Tools ha sido desinstalado correctamente de tu PC.",
+        "Wii U Transfer Tools y todos sus archivos han sido eliminados por completo de tu PC.",
     )
     root.destroy()
 
