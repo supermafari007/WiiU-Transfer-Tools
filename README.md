@@ -30,10 +30,11 @@ Este proyecto es **software de código abierto bajo la licencia MIT**. Consulta 
 
 ## Novedades de la Versión 2.0.3
 
-* **Conexión USB directa Android (AOA — *Android Open Accessory*):** Reemplaza el inestable MTP de Android 14/15 por un canal USB binario directo sin necesidad de Depuración USB, con sincronización por secuencia (`seqId`), apertura directa por `fileId` y padding anti-512B para instalaciones continuas sin cortes.
-* **Carga de juegos desde cualquier ubicación del celular y Memoria USB:** Escaneo recursivo inteligente en todo el almacenamiento del celular (memoria interna, `/Download`, `/WiiU_Transfer`, subcarpetas y microSD) más un explorador visual de carpetas en Android, y escaneo recursivo en Memorias USB.
-* **Actualización directa de `WiiU_Transfer.wuhb` en la SD de la Wii U desde Android y PC:** Al pulsar *Descargar App Wii U (.wuhb)* desde el celular (por USB directo AOA o por Wi-Fi) o desde el PC (directo a la SD conectada o por Wi-Fi a la consola), sobrescribe automáticamente `SD:/wiiu/apps/WiiU_Transfer.wuhb` sin pasos manuales.
-* **Instalador de Windows pulido:** Sin ventanas de consola visibles, ventana sin cortes a 125% DPI, pregunta al terminar si abrir el programa y desinstalador que elimina por completo todos los archivos, accesos directos, reglas de Firewall y registro.
+* **Conexión USB directa Android (AOA — *Android Open Accessory*):** Canal USB binario directo sin necesidad de activar Depuración USB, con sincronización por secuencia (`seqId`), apertura directa por `fileId`, `WakeLock` activo durante transferencias largas y soporte para juegos grandes de hasta ~25 GB y colas de múltiples juegos (bloques multi-paquete de 12,000 B sin bloqueos EHCI).
+* **Carga de juegos desde cualquier ubicación en Android y Memoria USB:** Escaneo recursivo automático en todo el almacenamiento de Android (memoria interna, `/Download`, `/WiiU_Transfer`, subcarpetas y microSD) + explorador visual de carpetas, botón **Actualizar lista** y escaneo limpio automático al abrir la app; escaneo recursivo completo en Memorias USB (`exFAT`, `FAT32`, `NTFS`, `FAT`).
+* **Colas de múltiples juegos y juegos pesados (~25 GB) blindados:** Verificación previa de espacio libre en destino (Disco USB / Consola) también en modo SD temporal, apertura instantánea de archivos `.app` grandes (>64 MB) sin bloqueos de preasignación IOS-FS, y cola resiliente que continúa con los demás juegos si uno se omite por espacio o error.
+* **Actualización directa de `WiiU_Transfer.wuhb` en la SD de la Wii U desde Android y PC:** Al pulsar *Descargar App Wii U (.wuhb)* desde Android (por USB directo AOA o Wi-Fi) o desde PC (directo a la SD conectada o por Wi-Fi a la consola), actualiza la app en la SD de la consola automáticamente (con reconciliación automática en Aroma si el `.wuhb` en ejecución está bloqueado).
+* **Instalador de Windows pulido (`WiiU_Transfer_Tools_Setup_v2.0.3.exe`):** Instalación silenciosa sin ventanas de consola visibles, diseño sin cortes a 125% DPI, pregunta al terminar si abrir el programa y desinstalador completo.
 
 ## Novedades de la Versión 2.0.0
 

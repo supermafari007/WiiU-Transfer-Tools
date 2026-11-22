@@ -505,21 +505,22 @@ public class UsbAoaServer {
             return;
         }
 
-        // Respuestas grandes (ej. lista larga de archivos): enviar en bloques <= 12 KB
+        // Respuestas grandes (ej. cola con muchos juegos grandes / cientos de .app):
+        // enviar bloques de 12000 B (12000 % 512 = 224 != 0) para garantizar short packet inmediato en EHCI
         byte[] hdr = new byte[12];
         wr32LE(hdr, 0, magic);
         wr32LE(hdr, 4, status);
         wr32LE(hdr, 8, len);
         writeRaw(hdr, 0, 12);
 
+        final int safeMultiChunk = 12000;
         int off = 0;
         while (off < len) {
-            int chunk = Math.min(MAX_CHUNK_DATA, len - off);
-            if ((chunk & 511) == 0 && off + chunk == len) {
-                // Evitar que el ultimo bloque sea multiplo exacto de 512 B
-                byte[] lastBuf = new byte[chunk + 1];
-                System.arraycopy(payload, off, lastBuf, 0, chunk);
-                writeRaw(lastBuf, 0, lastBuf.length);
+            int chunk = Math.min(safeMultiChunk, len - off);
+            if ((chunk & 511) == 0) {
+                byte[] padBuf = new byte[chunk + 1];
+                System.arraycopy(payload, off, padBuf, 0, chunk);
+                writeRaw(padBuf, 0, padBuf.length);
             } else {
                 writeRaw(payload, off, chunk);
             }

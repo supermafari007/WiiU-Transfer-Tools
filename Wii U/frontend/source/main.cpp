@@ -1956,6 +1956,28 @@ bool RunSinglePackageInstall(wutui::UiCanvas& ui,
             st.subStatusLine = "Necesita " + wutui::UiCanvas::FormatBytes(pkgTotalBytes);
             return false;
         }
+        // Verificar tambien espacio libre en el destino final (Disco USB o Memoria Consola)
+        // antes de perder tiempo copiando un juego grande (hasta ~25 GB) a la SD temporal
+        if (st.mochaUnlocked && pkgTotalBytes > 0) {
+            if (st.targetUsb) {
+                if (!st.usbAvailable) {
+                    st.statusIsError = true;
+                    st.statusLine = "Disco USB de Wii U no conectado.";
+                    return false;
+                }
+                if (st.usbFreeBytes < pkgTotalBytes + (64ULL * 1024 * 1024)) {
+                    st.statusIsError = true;
+                    st.statusLine = "Espacio insuficiente en Disco USB.";
+                    st.subStatusLine = "Necesita " + wutui::UiCanvas::FormatBytes(pkgTotalBytes);
+                    return false;
+                }
+            } else if (st.nandFreeBytes < pkgTotalBytes + (128ULL * 1024 * 1024)) {
+                st.statusIsError = true;
+                st.statusLine = "Espacio insuficiente en Memoria Consola.";
+                st.subStatusLine = "Necesita " + wutui::UiCanvas::FormatBytes(pkgTotalBytes);
+                return false;
+            }
+        }
         stageFsDir  = std::string(SD_TMP_BASE_FS) + "/" + pkgName;
         stageMcpDir = std::string(SD_TMP_BASE_MCP) + "/" + pkgName;
     }
@@ -2108,7 +2130,8 @@ bool RunSinglePackageInstall(wutui::UiCanvas& ui,
         if (useFsa) {
             wctx.fsaFile = 0;
             FSError fErr = static_cast<FSError>(-1);
-            if (fileSize > 0 && fileSize <= 0xFFFFFFFFULL) {
+            // Evitar preasignacion en archivos .app enormes (>64 MB) porque bloquea IOS-FS varios segundos
+            if (fileSize > 0 && fileSize <= 64ULL * 1024 * 1024) {
                 fErr = FSAOpenFileEx(st.fsaHandle, localPath.c_str(), "wb",
                                      static_cast<FSMode>(0x666), FS_OPEN_FLAG_PREALLOC_SIZE,
                                      static_cast<uint32_t>(fileSize), &wctx.fsaFile);
@@ -2379,8 +2402,11 @@ void RunInstallQueue(wutui::UiCanvas& ui, AppState& st, InputManager& input) {
     st.queueCurrent = 0;
 
     int installedOk = 0;
+    int failedCount = 0;
     bool cancelled = false;
     bool hadError = false;
+    std::string lastErrLine;
+    std::string lastErrSub;
 
     for (size_t qi = 0; qi < queue.size(); ++qi) {
         int idx = queue[qi];
@@ -2398,6 +2424,13 @@ void RunInstallQueue(wutui::UiCanvas& ui, AppState& st, InputManager& input) {
             break;
         } else {
             hadError = true;
+            ++failedCount;
+            lastErrLine = st.statusLine;
+            lastErrSub = st.subStatusLine;
+            // Si hay mas juegos en la cola (ej. uno grande no cupo o fallo), continuar con los demas
+            if (qi + 1 < queue.size()) {
+                continue;
+            }
             break;
         }
     }
@@ -2425,6 +2458,18 @@ void RunInstallQueue(wutui::UiCanvas& ui, AppState& st, InputManager& input) {
         st.subStatusLine = fromUsb
             ? "Retira la memoria USB antes de salir al Menu Wii U."
             : (st.targetUsb ? "Guardado en Disco USB." : "Guardado en Memoria Consola.");
+    } else if (!cancelled && hadError && installedOk > 0 && totalQ > 1) {
+        st.progress = 1.0f;
+        st.statusIsError = false;
+        st.statusIsSuccess = true;
+        st.statusLine = "Instalados " + std::to_string(installedOk) + " de " + std::to_string(totalQ) +
+                        " (" + std::to_string(failedCount) + " omitido).";
+        st.subStatusLine = !lastErrLine.empty() ? lastErrLine : "Los juegos con error quedaron marcados.";
+    } else if (!cancelled && hadError && !lastErrLine.empty()) {
+        st.statusIsError = true;
+        st.statusIsSuccess = false;
+        st.statusLine = lastErrLine;
+        st.subStatusLine = lastErrSub;
     } else if (cancelled) {
         st.progress = 0.0f;
         st.statusIsError = false;
