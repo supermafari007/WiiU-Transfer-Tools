@@ -1100,6 +1100,31 @@ bool ScanUsbPendrive(AppState& st) {
 
 // Autodetección unificada para "Modo USB" (Memoria USB exFAT/FAT32/NTFS/FAT o Celular Android MTP)
 bool ScanUnifiedUsb(AppState& st) {
+    // Si el celular Android ya tiene una sesion MTP viva, re-escanear SIN desconectar ni reiniciar endpoints
+    // (evita que FunctionFS de Android 14/15 cuelgue la conexion al pulsar [Y])
+    if (st.mtpConnected && st.mtpDev.IsConnected()) {
+        std::vector<usbmtp::MtpPkg> refreshedPkgs;
+        std::string scanDiag;
+        if (st.mtpDev.ScanWupPackages(refreshedPkgs, scanDiag)) {
+            st.source = PkgSource::AndroidMtp;
+            st.mtpPkgs = std::move(refreshedPkgs);
+            st.selectedIdx = 0;
+            st.scrollOffset = 0;
+            st.statusIsError = false;
+            st.statusIsSuccess = true;
+            st.statusLine = "Celular conectado (" + st.mtpDeviceName + ")";
+            st.subStatusLine = st.mtpPkgs.empty()
+                ? "Pon tus juegos en /WiiU_Transfer o /Download del celular."
+                : (std::to_string(st.mtpPkgs.size()) + " juego(s) listo(s) en el celular.");
+            return true;
+        }
+        // Solo desconectar si la sesion anterior realmente murio (ej. se desconecto el cable)
+        st.mtpDev.Disconnect();
+        st.mtpPkgs.clear();
+        st.mtpConnected = false;
+        st.mtpDeviceName.clear();
+    }
+
     st.usbFat.Unmount();
     st.usbPkgs.clear();
     st.usbFatConnected = false;
@@ -2210,6 +2235,9 @@ bool RunSinglePackageInstall(wutui::UiCanvas& ui,
                         ok = false;
                         wctx.cancelRequested = true;
                         st.statusLine = "Error leyendo datos del Celular.";
+                        if (!st.mtpDev.LastError().empty()) {
+                            st.subStatusLine = st.mtpDev.LastError();
+                        }
                         break;
                     }
                 } else if (fromUsb) {

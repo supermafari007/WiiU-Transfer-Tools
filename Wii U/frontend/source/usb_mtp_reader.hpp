@@ -38,8 +38,8 @@ constexpr uint16_t kMtpRespOpNotSupported       = 0x2005;
 
 constexpr uint16_t kMtpFormatAssociation = 0x3001; // Carpeta / Directorio
 
-constexpr uint32_t kMtpDmaBufSize   = 64 * 1024;   // 64 KB por transaccion USB Bulk (limite seguro en IOS-USB/nsysuhs)
-constexpr uint32_t kMtpPartialChunk = 60 * 1024;   // 60 KB de carga util por GetPartialObject
+constexpr uint32_t kMtpDmaBufSize   = 16 * 1024;   // 16 KB por transaccion USB Bulk (coincide con limite IOS-USB/nsysuhs y buffer MtpServer de Android)
+constexpr uint32_t kMtpPartialChunk = 12 * 1024;   // 12 KB utiles (+12 B header = 12300 B: cabe en 1 sola lectura de 16 KB y evita ZLP al no ser multiplo de 512)
 constexpr int32_t  kMtpMaxProfiles  = 32;          // Hasta 32 interfaces USB (soporta telefonos compuestos Motorola/Samsung/Xiaomi)
 
 struct MtpFile {
@@ -113,9 +113,9 @@ public:
                 if (offset_ <= 0xFFFFFFFFULL && dev_->supportsPartial_) {
                     uint32_t chunkGot = 0;
                     bool readOk = false;
-                    for (int attempt = 0; attempt < 3 && !readOk; ++attempt) {
+                    for (int attempt = 0; attempt < 2 && !readOk; ++attempt) {
                         if (attempt > 0) {
-                            dev_->RecoverEndpoints();
+                            OSSleepTicks(OSMillisecondsToTicks(40));
                         }
                         if (dev_->ReadPartialObject(handle_, static_cast<uint32_t>(offset_), want, out + got, chunkGot) &&
                             chunkGot > 0) {
@@ -169,6 +169,7 @@ public:
 
     bool IsConnected() const { return connected_; }
     const std::string& DeviceName() const { return deviceName_; }
+    const std::string& LastError() const { return lastErr_; }
 
     void Disconnect() {
         if (connected_) {
@@ -305,13 +306,12 @@ public:
                 epIn_ = bulkInNum;
                 epOut_ = bulkOutNum;
 
-                // Habilitar endpoints con tamano seguro en IOS-USB (64 KB, fallback 16 KB)
+                // Habilitar endpoints con tamano seguro en IOS-USB (16 KB; sin ClearEndpointHalt que cuelga FunctionFS en Android 14/15)
                 UHSStatus epSt = UhsAdministerEndpoint(&uhsHandle_, ifHandle_, UHS_ADMIN_EP_ENABLE, epMask, 1, kMtpDmaBufSize);
                 if (epSt != UHS_STATUS_OK) {
-                    epSt = UhsAdministerEndpoint(&uhsHandle_, ifHandle_, UHS_ADMIN_EP_ENABLE, epMask, 1, 16 * 1024);
+                    epSt = UhsAdministerEndpoint(&uhsHandle_, ifHandle_, UHS_ADMIN_EP_ENABLE, epMask, 1, 8 * 1024);
                 }
-                UhsClearEndpointHalt(&uhsHandle_, ifHandle_, epIn_, ENDPOINT_TRANSFER_IN);
-                UhsClearEndpointHalt(&uhsHandle_, ifHandle_, epOut_, ENDPOINT_TRANSFER_OUT);
+                OSSleepTicks(OSMillisecondsToTicks(30));
 
                 txId_ = 1;
                 sessionOpen_ = false;
@@ -607,7 +607,7 @@ private:
         bool gotConcatResp = false;
         while (totalDataBytes > 0 && outPayload.size() < totalDataBytes) {
             uint32_t rem = totalDataBytes - static_cast<uint32_t>(outPayload.size());
-            int32_t rn = BulkIn(dmaBuf_, std::min<uint32_t>(((rem + 511u) & ~511u), kMtpDmaBufSize));
+            int32_t rn = BulkInSkipZlp(std::min<uint32_t>(((rem + 511u) & ~511u), kMtpDmaBufSize));
             if (rn <= 0) return false;
             uint32_t takeNow = std::min<uint32_t>(static_cast<uint32_t>(rn), rem);
             outPayload.insert(outPayload.end(), dmaBuf_, dmaBuf_ + takeNow);
@@ -635,6 +635,7 @@ private:
                            uint8_t* dst,
                            uint32_t& outGot) {
         outGot = 0;
+        lastErr_.clear();
         uint32_t params[3] = {objHandle, offset, maxBytes};
         uint32_t curTx = txId_++;
         uint8_t cmdBuf[24]{};
@@ -646,37 +647,73 @@ private:
         Wr32LE(cmdBuf + 16, params[1]);
         Wr32LE(cmdBuf + 20, params[2]);
 
-        if (BulkOut(cmdBuf, 24) < 24) return false;
+        int32_t outRc = BulkOut(cmdBuf, 24);
+        if (outRc < 24) {
+            char b[64];
+            std::snprintf(b, sizeof(b), "MTP CMD fallo (rc=%d)", outRc);
+            lastErr_ = b;
+            return false;
+        }
 
         int32_t n = BulkInSkipZlp(kMtpDmaBufSize);
-        if (n < 12) return false;
+        if (n < 12) {
+            char b[64];
+            std::snprintf(b, sizeof(b), "MTP HDR fallo (n=%d)", n);
+            lastErr_ = b;
+            return false;
+        }
 
         uint32_t contLen  = usbfat::Rd32LE(dmaBuf_ + 0);
         uint16_t contType = usbfat::Rd16LE(dmaBuf_ + 4);
         uint16_t contCode = usbfat::Rd16LE(dmaBuf_ + 6);
 
         if (contType == kMtpContResponse) {
+            if (contCode != kMtpRespOk) {
+                char b[64];
+                std::snprintf(b, sizeof(b), "MTP rechazo Partial (0x%04X)", contCode);
+                lastErr_ = b;
+            }
             return contCode == kMtpRespOk;
         }
-        if (contType != kMtpContData || contLen < 12) return false;
+        if (contType != kMtpContData || contLen < 12) {
+            char b[64];
+            std::snprintf(b, sizeof(b), "MTP tipo inesperado (%u, len=%u)", contType, contLen);
+            lastErr_ = b;
+            return false;
+        }
 
-        uint32_t expected = std::min<uint32_t>(contLen - 12u, maxBytes);
+        uint32_t expected = (contLen == 0xFFFFFFFFu)
+            ? maxBytes
+            : std::min<uint32_t>(contLen - 12u, maxBytes);
         uint32_t firstPayload = static_cast<uint32_t>(n - 12);
         uint32_t firstCopy = std::min<uint32_t>(firstPayload, expected);
-        std::memcpy(dst, dmaBuf_ + 12, firstCopy);
+        if (firstCopy > 0) {
+            std::memcpy(dst, dmaBuf_ + 12, firstCopy);
+        }
         outGot = firstCopy;
 
         if (firstPayload >= expected + 12u &&
             usbfat::Rd16LE(dmaBuf_ + 12 + expected + 4) == kMtpContResponse) {
-            return usbfat::Rd16LE(dmaBuf_ + 12 + expected + 6) == kMtpRespOk;
+            uint16_t rc = usbfat::Rd16LE(dmaBuf_ + 12 + expected + 6);
+            if (rc != kMtpRespOk) {
+                char b[64];
+                std::snprintf(b, sizeof(b), "MTP Resp1 (0x%04X)", rc);
+                lastErr_ = b;
+            }
+            return rc == kMtpRespOk;
         }
 
         bool gotConcatResp = false;
         uint16_t concatRespCode = 0;
         while (outGot < expected) {
             uint32_t rem = expected - outGot;
-            int32_t rn = BulkIn(dmaBuf_, std::min<uint32_t>(((rem + 511u) & ~511u), kMtpDmaBufSize));
-            if (rn <= 0) return false;
+            int32_t rn = BulkInSkipZlp(std::min<uint32_t>(((rem + 511u) & ~511u), kMtpDmaBufSize));
+            if (rn <= 0) {
+                char b[64];
+                std::snprintf(b, sizeof(b), "MTP DATA corte (rn=%d, got=%u/%u)", rn, outGot, expected);
+                lastErr_ = b;
+                return false;
+            }
             uint32_t copyNow = std::min<uint32_t>(static_cast<uint32_t>(rn), rem);
             std::memcpy(dst + outGot, dmaBuf_, copyNow);
             outGot += copyNow;
@@ -692,9 +729,19 @@ private:
 
         // Recibir RESPONSE final (saltando posible ZLP si contLen fue multiplo exacto de 512 B)
         int32_t respN = BulkInSkipZlp(512);
-        if (respN < 12) return false;
+        if (respN < 12) {
+            char b[64];
+            std::snprintf(b, sizeof(b), "MTP RESP fallo (n=%d)", respN);
+            lastErr_ = b;
+            return false;
+        }
         uint16_t rType = usbfat::Rd16LE(dmaBuf_ + 4);
         uint16_t rCode = usbfat::Rd16LE(dmaBuf_ + 6);
+        if (rType != kMtpContResponse || rCode != kMtpRespOk) {
+            char b[64];
+            std::snprintf(b, sizeof(b), "MTP RESP (t=%u, 0x%04X)", rType, rCode);
+            lastErr_ = b;
+        }
         return (rType == kMtpContResponse && rCode == kMtpRespOk);
     }
 
@@ -961,6 +1008,7 @@ private:
     uint8_t epOut_ = 0;
     uint32_t txId_ = 1;
     std::string deviceName_;
+    std::string lastErr_;
 };
 
 } // namespace usbmtp
