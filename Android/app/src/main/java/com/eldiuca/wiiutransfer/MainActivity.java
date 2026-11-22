@@ -496,7 +496,7 @@ public class MainActivity extends Activity {
         connectionCard.addView(connTagText);
 
         connTitleText = new TextView(this);
-        connTitleText.setText("Conecta el celular al USB frontal de la Wii U");
+        connTitleText.setText("Conecta Android al USB frontal de la Wii U");
         connTitleText.setTextColor(Color.WHITE);
         connTitleText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
         connTitleText.setTypeface(Typeface.DEFAULT_BOLD);
@@ -555,7 +555,7 @@ public class MainActivity extends Activity {
         pkgCard.setBackground(roundedShape(COL_CARD, dp(16), dp(1), COL_BORDER));
 
         pkgHeaderCountText = new TextView(this);
-        pkgHeaderCountText.setText("Juegos en el celular (0)");
+        pkgHeaderCountText.setText("Juegos en Android (0)");
         pkgHeaderCountText.setTextColor(COL_TEXT);
         pkgHeaderCountText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
         pkgHeaderCountText.setTypeface(Typeface.DEFAULT_BOLD);
@@ -777,7 +777,7 @@ public class MainActivity extends Activity {
             if (!readme.exists()) {
                 FileOutputStream fos = new FileOutputStream(readme);
                 String info = "Coloca aqui tus carpetas de juegos de Wii U (con title.tmd, title.tik y archivos .app).\n" +
-                              "- Modo USB (Cable): Conecta tu celular al puerto USB frontal de la Wii U en modo 'Transferencia de archivos' y elige 'Modo USB' en la consola.\n" +
+                              "- Modo USB (Cable): Conecta tu Android al puerto USB frontal de la Wii U en modo 'Transferencia de archivos' y elige 'Modo USB' en la consola.\n" +
                               "- Modo Red (Wi-Fi): Pulsa 'Compartir Juegos por Red' y elige 'Modo Red' en la consola.\n";
                 fos.write(info.getBytes("UTF-8"));
                 fos.close();
@@ -813,7 +813,7 @@ public class MainActivity extends Activity {
         if (scanWholePhone) {
             scanned = NfsaTransferServer.scanPackagesMultiRoot(getAllStorageRoots(), markedNames);
             if (folderPathText != null) {
-                folderPathText.setText("Todo el celular (cualquier carpeta)");
+                folderPathText.setText("Todo Android (cualquier carpeta)");
             }
         } else {
             scanned = NfsaTransferServer.scanPackages(activeFolder, markedNames);
@@ -824,7 +824,7 @@ public class MainActivity extends Activity {
         packages.clear();
         packages.addAll(scanned);
 
-        // Purgar cualquier juego que ya haya sido borrado del celular
+        // Purgar cualquier juego que ya haya sido borrado de Android
         Set<String> existingNames = new HashSet<String>();
         for (NfsaTransferServer.WupPackage p : packages) {
             existingNames.add(p.name);
@@ -858,7 +858,7 @@ public class MainActivity extends Activity {
 
     private void rebuildPackageListViews() {
         pkgListContainer.removeAllViews();
-        pkgHeaderCountText.setText("Juegos en el celular (" + packages.size() + ")");
+        pkgHeaderCountText.setText("Juegos en Android (" + packages.size() + ")");
 
         int markedCount = 0;
         for (NfsaTransferServer.WupPackage p : packages) {
@@ -1021,7 +1021,7 @@ public class MainActivity extends Activity {
                 headerPillDot.setBackground(circleShape(COL_AMBER_TX));
                 headerPillText.setText("Esperando Wii U");
             } else {
-                connTitleText.setText("Conecta el celular al USB frontal de la Wii U");
+                connTitleText.setText("Conecta Android al USB frontal de la Wii U");
                 connSubText.setText("No necesitas activar Depuraci\u00f3n USB. Solo conecta el cable y pulsa [Y] en Wii U.");
                 headerPillLayout.setBackground(roundedShape(COL_PILL_OFF, dp(14), 0, 0));
                 headerPillDot.setBackground(circleShape(COL_MUTED));
@@ -1423,7 +1423,7 @@ public class MainActivity extends Activity {
 
         // Descripción breve en lenguaje simple
         TextView descTv = new TextView(this);
-        descTv.setText("Herramienta gratuita para transferir e instalar juegos de Wii U desde tu Celular Android, PC o Memoria USB (exFAT, FAT32, NTFS y FAT) por cable USB o Wi-Fi sin pasos t\u00e9cnicos.");
+        descTv.setText("Herramienta gratuita para transferir e instalar juegos de Wii U desde tu Android, PC o Memoria USB (exFAT, FAT32, NTFS y FAT) por cable USB o Wi-Fi sin pasos t\u00e9cnicos.");
         descTv.setTextColor(COL_TEXT);
         descTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
         LinearLayout.LayoutParams descLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -1813,8 +1813,8 @@ public class MainActivity extends Activity {
                 new File(extRoot, "install")
         };
         String[] labels = new String[]{
-                "Todo el celular (Buscar en cualquier carpeta - Recomendado)",
-                "Explorar carpetas del celular...",
+                "Todo Android (Buscar en cualquier carpeta - Recomendado)",
+                "Explorar carpetas de Android...",
                 "/ almacenamiento / Download (Descargas)",
                 "/ almacenamiento / WiiU_Transfer",
                 "/ almacenamiento / WUP",

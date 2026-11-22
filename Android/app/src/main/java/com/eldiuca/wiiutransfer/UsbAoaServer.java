@@ -9,6 +9,7 @@ import android.hardware.usb.UsbAccessory;
 import android.hardware.usb.UsbManager;
 import android.os.Build;
 import android.os.ParcelFileDescriptor;
+import android.os.PowerManager;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -29,7 +30,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Servidor USB directo por Android Open Accessory (AOA) para Wii U Transfer Tools.
- * Permite conectar el celular a la Wii U por cable USB sin Depuración USB y sin MTP,
+ * Permite conectar Android a la Wii U por cable USB sin Depuración USB y sin MTP,
  * leyendo directamente los juegos desde la carpeta elegida por el usuario.
  */
 public class UsbAoaServer {
@@ -74,6 +75,7 @@ public class UsbAoaServer {
     private FileInputStream inStream;
     private FileOutputStream outStream;
     private Thread ioThread;
+    private PowerManager.WakeLock aoaWakeLock;
     private boolean receiversRegistered = false;
 
     private final BroadcastReceiver usbReceiver = new BroadcastReceiver() {
@@ -239,6 +241,17 @@ public class UsbAoaServer {
             stopping.set(false);
             connected.set(true);
             currentFile = "";
+            try {
+                PowerManager pm = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
+                if (pm != null && aoaWakeLock == null) {
+                    aoaWakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "WiiUTransfer:AoaUsbLock");
+                    aoaWakeLock.setReferenceCounted(false);
+                }
+                if (aoaWakeLock != null && !aoaWakeLock.isHeld()) {
+                    aoaWakeLock.acquire(4 * 60 * 60 * 1000L);
+                }
+            } catch (Exception ignored) {
+            }
             notifyState(true, "Conectado por USB directo a la Wii U");
 
             ioThread = new Thread(new Runnable() {
@@ -263,6 +276,12 @@ public class UsbAoaServer {
         inStream = null;
         outStream = null;
         accessoryPfd = null;
+        try {
+            if (aoaWakeLock != null && aoaWakeLock.isHeld()) {
+                aoaWakeLock.release();
+            }
+        } catch (Exception ignored) {
+        }
         if (wasConn && reason != null) {
             notifyState(false, reason);
         }

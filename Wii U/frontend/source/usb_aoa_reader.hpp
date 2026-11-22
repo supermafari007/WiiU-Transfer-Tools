@@ -198,7 +198,7 @@ public:
             Disconnect();
         }
 
-        // 1. Buscar primero si el celular YA esta en modo AOA (0x18D1:0x2D00..0x2D05)
+        // 1. Buscar primero si Android YA esta en modo AOA (0x18D1:0x2D00..0x2D05)
         if (TryAttachAoaDevice(outDeviceName, outDiag)) {
             return true;
         }
@@ -207,7 +207,7 @@ public:
         bool switched = TrySwitchPhoneToAoa(outDiag);
         if (!switched) {
             if (outDiag.empty()) {
-                outDiag = "Conecta tu celular Android por USB y abre Wii U Transfer Tools.";
+                outDiag = "Conecta tu Android por USB y abre Wii U Transfer Tools.";
             }
             return false;
         }
@@ -221,7 +221,7 @@ public:
         }
 
         if (outDiag.empty()) {
-            outDiag = "Acepta el aviso USB en tu celular y pulsa [Y] otra vez.";
+            outDiag = "Acepta el aviso USB en tu Android y pulsa [Y] otra vez.";
         }
         return false;
     }
@@ -230,7 +230,7 @@ public:
         outPkgs.clear();
         outDiag.clear();
         if (!connected_) {
-            outDiag = "Celular USB no conectado.";
+            outDiag = "Android USB no conectado.";
             return false;
         }
 
@@ -238,7 +238,7 @@ public:
         uint32_t status = 0;
         if (!ExchangeCommand(kCmdListPkgs, nullptr, 0, respPayload, status, 6000) || status != 0) {
             outDiag = lastErr_.empty()
-                ? "Acepta el permiso USB en tu celular y pulsa [Y]."
+                ? "Acepta el permiso USB en tu Android y pulsa [Y]."
                 : lastErr_;
             return false;
         }
@@ -447,7 +447,7 @@ private:
         }
 
         if (!seenUsb.empty()) {
-            outDiag = "USB " + seenUsb + " detectado: desbloquea tu celular y abre la App Android.";
+            outDiag = "USB " + seenUsb + " detectado: desbloquea tu Android y abre la App Android.";
         }
         return false;
     }
@@ -539,7 +539,7 @@ private:
                     return true;
                 }
 
-                outDiag = "Toca 'Aceptar' en el aviso USB de tu celular y pulsa [Y].";
+                outDiag = "Toca 'Aceptar' en el aviso USB de tu Android y pulsa [Y].";
                 Disconnect();
                 return false;
             }
@@ -680,26 +680,33 @@ private:
     bool OpenRemoteFile(uint32_t fileId, uint64_t& outSize) {
         uint8_t idBuf[4]{};
         Wr32LE(idBuf, fileId);
-        std::vector<uint8_t> resp;
-        uint32_t status = 0;
-        if (!ExchangeCommand(kCmdOpenFile, idBuf, 4, resp, status, 5000)) {
-            return false;
-        }
-        if (status != 0 || resp.size() < 8) {
-            if (!resp.empty()) {
-                lastErr_.assign(reinterpret_cast<const char*>(resp.data()), resp.size());
-            } else {
-                char b[64];
-                std::snprintf(b, sizeof(b), "AOA OPEN st=%u len=%u (id=%u)",
-                              status, static_cast<uint32_t>(resp.size()), fileId);
-                lastErr_ = b;
+        for (int attempt = 0; attempt < 2; ++attempt) {
+            if (attempt > 0) {
+                std::string dummyModel;
+                PingDevice(dummyModel, 2000);
             }
-            return false;
+            std::vector<uint8_t> resp;
+            uint32_t status = 0;
+            if (!ExchangeCommand(kCmdOpenFile, idBuf, 4, resp, status, 10000)) {
+                continue;
+            }
+            if (status != 0 || resp.size() < 8) {
+                if (!resp.empty()) {
+                    lastErr_.assign(reinterpret_cast<const char*>(resp.data()), resp.size());
+                } else {
+                    char b[64];
+                    std::snprintf(b, sizeof(b), "AOA OPEN st=%u len=%u (id=%u)",
+                                  status, static_cast<uint32_t>(resp.size()), fileId);
+                    lastErr_ = b;
+                }
+                return false;
+            }
+            uint64_t lo = usbfat::Rd32LE(resp.data());
+            uint64_t hi = usbfat::Rd32LE(resp.data() + 4);
+            outSize = lo | (hi << 32);
+            return true;
         }
-        uint64_t lo = usbfat::Rd32LE(resp.data());
-        uint64_t hi = usbfat::Rd32LE(resp.data() + 4);
-        outSize = lo | (hi << 32);
-        return true;
+        return false;
     }
 
     bool CloseRemoteFile() {

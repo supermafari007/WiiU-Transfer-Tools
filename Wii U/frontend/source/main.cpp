@@ -1039,7 +1039,7 @@ bool ScanAndroidMtp(AppState& st) {
         st.statusIsError = true;
         st.statusIsSuccess = false;
         st.statusLine = diag;
-        st.subStatusLine = "Conecta tu Memoria USB o celular al puerto USB frontal.";
+        st.subStatusLine = "Conecta tu Memoria USB o Android al puerto USB frontal.";
         return false;
     }
 
@@ -1052,7 +1052,7 @@ bool ScanAndroidMtp(AppState& st) {
 
     st.statusIsError = false;
     st.statusIsSuccess = true;
-    st.statusLine = "Celular conectado (" + devName + ")";
+    st.statusLine = "Android conectado (" + devName + ")";
     st.subStatusLine = st.mtpPkgs.empty()
         ? "No se encontraron juegos en /WiiU_Transfer o /Download."
         : (std::to_string(st.mtpPkgs.size()) + " juego(s) listo(s) para instalar.");
@@ -1079,7 +1079,7 @@ bool ScanUsbPendrive(AppState& st) {
         st.statusIsError = true;
         st.statusIsSuccess = false;
         st.statusLine = diag;
-        st.subStatusLine = "Conecta tu Memoria USB o celular al puerto USB frontal.";
+        st.subStatusLine = "Conecta tu Memoria USB o Android al puerto USB frontal.";
         return false;
     }
 
@@ -1098,9 +1098,9 @@ bool ScanUsbPendrive(AppState& st) {
     return true;
 }
 
-// Autodetección unificada para "Modo USB" (Memoria USB exFAT/FAT32/NTFS/FAT o Celular Android MTP)
+// Autodetección unificada para "Modo USB" (Memoria USB exFAT/FAT32/NTFS/FAT o Android MTP)
 bool ScanUnifiedUsb(AppState& st) {
-    // Si el celular Android ya tiene una sesion AOA viva, re-escanear SIN desconectar
+    // Si el Android ya tiene una sesion AOA viva, re-escanear SIN desconectar
     if (st.mtpConnected && st.mtpDev.IsConnected()) {
         std::vector<usbaoa::AoaPkg> refreshedPkgs;
         std::string scanDiag;
@@ -1111,10 +1111,10 @@ bool ScanUnifiedUsb(AppState& st) {
             st.scrollOffset = 0;
             st.statusIsError = false;
             st.statusIsSuccess = true;
-            st.statusLine = "Celular conectado (" + st.mtpDeviceName + ")";
+            st.statusLine = "Android conectado (" + st.mtpDeviceName + ")";
             st.subStatusLine = st.mtpPkgs.empty()
                 ? "Elige tu carpeta de juegos en la App Android."
-                : (std::to_string(st.mtpPkgs.size()) + " juego(s) listo(s) en el celular.");
+                : (std::to_string(st.mtpPkgs.size()) + " juego(s) listo(s) en Android.");
             return true;
         }
         // Solo desconectar si la sesion anterior realmente murio (ej. se desconecto el cable)
@@ -1155,7 +1155,7 @@ bool ScanUnifiedUsb(AppState& st) {
         }
     }
 
-    // 2. Si no hay Memoria USB, buscar Celular Android por USB MTP
+    // 2. Si no hay Memoria USB, buscar Android por USB MTP
     std::string mtpName;
     std::string mtpDiag;
     if (st.mtpDev.ProbeAndConnect(mtpName, mtpDiag)) {
@@ -1168,17 +1168,17 @@ bool ScanUnifiedUsb(AppState& st) {
         st.scrollOffset = 0;
         st.statusIsError = false;
         st.statusIsSuccess = true;
-        st.statusLine = "Celular conectado (" + mtpName + ")";
+        st.statusLine = "Android conectado (" + mtpName + ")";
         st.subStatusLine = st.mtpPkgs.empty()
-            ? "Pon tus juegos en /WiiU_Transfer o /Download del celular."
-            : (std::to_string(st.mtpPkgs.size()) + " juego(s) listo(s) en el celular.");
+            ? "Pon tus juegos en /WiiU_Transfer o /Download de Android."
+            : (std::to_string(st.mtpPkgs.size()) + " juego(s) listo(s) en Android.");
         return true;
     }
 
     st.source = PkgSource::UsbFat;
     st.statusIsError = true;
     st.statusIsSuccess = false;
-    st.statusLine = "No se detecto Memoria USB ni Celular por USB.";
+    st.statusLine = "No se detecto Memoria USB ni Android por USB.";
     st.subStatusLine = !mtpDiag.empty()
         ? mtpDiag
         : "Soporta exFAT, FAT32, NTFS, FAT y Android. Pulsa [Y].";
@@ -1464,7 +1464,7 @@ void DrawUI(wutui::UiCanvas& ui, const AppState& st) {
             ui.DrawTextCentered(px, 24, pw, 48, "Memoria USB Lista", wutui::COL_WHITE, wutui::FontId::Body);
         } else if (st.mtpConnected) {
             ui.FillRoundedRect(px, 24, pw, 48, 24, wutui::COL_GREEN);
-            ui.DrawTextCentered(px, 24, pw, 48, "Celular Conectado", wutui::COL_WHITE, wutui::FontId::Body);
+            ui.DrawTextCentered(px, 24, pw, 48, "Android Conectado", wutui::COL_WHITE, wutui::FontId::Body);
         } else {
             ui.FillRoundedRect(px, 24, pw, 48, 24, wutui::COL_PILL_OFF);
             ui.DrawTextCentered(px, 24, pw, 48, "Sin USB [Y] Buscar", wutui::COL_WHITE, wutui::FontId::Small);
@@ -1517,18 +1517,18 @@ void DrawUI(wutui::UiCanvas& ui, const AppState& st) {
         if (!isUsbMode) {
             ui.DrawText(60, 210, st.connected
                 ? "No hay juegos en la carpeta compartida."
-                : "Abre el programa en tu PC o App en tu Celular", wutui::COL_MUTED, wutui::FontId::Body);
+                : "Abre el programa en tu PC o App en tu Android", wutui::COL_MUTED, wutui::FontId::Body);
             ui.DrawText(60, 244, st.connected
                 ? "Agrega tus juegos y pulsa [Y] para actualizar."
                 : "y pulsa [Y] para buscar juegos por Red.", wutui::COL_MUTED, wutui::FontId::Body);
         } else {
             bool anyUsbConn = (st.usbFatConnected || st.mtpConnected);
             ui.DrawText(60, 210, anyUsbConn
-                ? "No se encontraron juegos en el dispositivo USB."
-                : "Conecta tu Memoria USB o Celular Android al", wutui::COL_MUTED, wutui::FontId::Body);
+                ? "No se encontraron juegos disponibles."
+                : "Conecta tu Memoria USB o Android al puerto", wutui::COL_MUTED, wutui::FontId::Body);
             ui.DrawText(60, 244, anyUsbConn
-                ? "Copialos en la carpeta /install o /WiiU_Transfer."
-                : "puerto USB frontal y pulsa [Y] para buscar.", wutui::COL_MUTED, wutui::FontId::Body);
+                ? "Agrega tus juegos y pulsa [Y] para actualizar."
+                : "USB frontal de la consola y pulsa [Y].", wutui::COL_MUTED, wutui::FontId::Body);
             if (!anyUsbConn) {
                 ui.DrawText(60, 282, "Formatos USB: exFAT, FAT32, NTFS, FAT y Android.", wutui::COL_CYAN_SUB, wutui::FontId::Small);
             }
@@ -1695,7 +1695,7 @@ void DrawUI(wutui::UiCanvas& ui, const AppState& st) {
         ui.FillRoundedRect(696, 566, 502, 50, 10, wutui::COL_CARD_ALT);
         ui.DrawRoundedOutline(696, 566, 502, 50, 10, 1, wutui::COL_CYAN_DK);
         ui.DrawTextCentered(696, 566, 502, 50,
-                            "Celular conectado por USB: instalacion directa",
+                            "Android conectado por USB: instalacion directa",
                             wutui::COL_CYAN_SUB, wutui::FontId::Small);
     } else {
         ui.DrawTextCentered(696, 574, 502, 32,
@@ -1889,7 +1889,7 @@ bool RunSinglePackageInstall(wutui::UiCanvas& ui,
     st.statusIsError = false;
     st.statusIsSuccess = false;
     st.statusLine = fromMtp
-        ? "Preparando copia desde Celular..."
+        ? "Preparando copia desde Android..."
         : (fromUsb
             ? "Preparando copia desde Memoria USB..."
             : "Preparando descarga por Red...");
@@ -2004,7 +2004,7 @@ bool RunSinglePackageInstall(wutui::UiCanvas& ui,
     } else {
         if (!st.mtpDev.IsConnected() || mtpPkgCopy.files.empty()) {
             st.statusIsError = true;
-            st.statusLine = "Celular desconectado o sin archivos.";
+            st.statusLine = "Android desconectado o sin archivos.";
             st.subStatusLine = "Pulsa [Y] para volver a buscar.";
             return false;
         }
@@ -2138,7 +2138,7 @@ bool RunSinglePackageInstall(wutui::UiCanvas& ui,
             }
         }
 
-        const char* prefix = fromMtp ? "Copiando del Celular (" : (fromUsb ? "Copiando de Memoria USB (" : "Recibiendo por Red (");
+        const char* prefix = fromMtp ? "Copiando de Android (" : (fromUsb ? "Copiando de Memoria USB (" : "Recibiendo por Red (");
         st.statusLine = std::string(prefix) +
                         std::to_string(fi + 1) + "/" + std::to_string(fileCount) + ") " + pkgName;
         st.subStatusLine = subPath;
@@ -2151,7 +2151,7 @@ bool RunSinglePackageInstall(wutui::UiCanvas& ui,
             if (!mtpStream.Open(&st.mtpDev, mtpPkgCopy.files[fi].fileId, fileSize)) {
                 ok = false;
                 wctx.cancelRequested = true;
-                st.statusLine = "Error abriendo archivo en el Celular.";
+                st.statusLine = "Error abriendo archivo en Android.";
                 if (!st.mtpDev.LastError().empty()) {
                     st.subStatusLine = st.mtpDev.LastError();
                 }
@@ -2243,7 +2243,7 @@ bool RunSinglePackageInstall(wutui::UiCanvas& ui,
                     if (!mtpStream.ReadExact(wctx.bufs[bufIdx] + blockReceived, slice)) {
                         ok = false;
                         wctx.cancelRequested = true;
-                        st.statusLine = "Error leyendo datos del Celular.";
+                        st.statusLine = "Error leyendo datos de Android.";
                         if (!st.mtpDev.LastError().empty()) {
                             st.subStatusLine = st.mtpDev.LastError();
                         }
@@ -2416,7 +2416,7 @@ void RunInstallQueue(wutui::UiCanvas& ui, AppState& st, InputManager& input) {
         if (totalQ > 1) {
             st.statusLine = "Se instalaron " + std::to_string(installedOk) + " de " + std::to_string(totalQ) + " juegos!";
         } else if (fromMtp) {
-            st.statusLine = "Juego instalado desde tu Celular!";
+            st.statusLine = "Juego instalado desde tu Android!";
         } else if (fromUsb) {
             st.statusLine = "Juego instalado desde Memoria USB!";
         } else {
@@ -2471,7 +2471,7 @@ void HandleTouch(int x,
         }
         return;
     }
-    // Pill header derecha (Buscar Memoria USB / Celular / Red) (x>=1030, y<=96)
+    // Pill header derecha (Buscar Memoria USB / Android / Red) (x>=1030, y<=96)
     if (x >= 1030 && y <= 96) {
         triggerScan = true;
         return;
@@ -2557,9 +2557,50 @@ void HandleTouch(int x,
 constexpr uint16_t kSdUpdatePort = 7333;
 constexpr const char* kSdWuhbPath = "fs:/vol/external01/wiiu/apps/WiiU_Transfer.wuhb";
 constexpr const char* kSdWuhbTmp  = "fs:/vol/external01/wiiu/apps/WiiU_Transfer.wuhb.new";
+constexpr const char* kSdWuhbAlt  = "fs:/vol/external01/wiiu/apps/WiiU_Transfer_Update.wuhb";
 
-bool FinalizeSdWuhbTemp(AppState& st, std::string& outErr) {
+bool CopyFileRaw(const char* srcPath, const char* dstPath) {
+    FILE* src = std::fopen(srcPath, "rb");
+    FILE* dst = std::fopen(dstPath, "wb");
+    if (!src || !dst) {
+        if (src) std::fclose(src);
+        if (dst) std::fclose(dst);
+        return false;
+    }
+    uint8_t buf[64 * 1024];
+    bool ok = true;
+    while (true) {
+        size_t r = std::fread(buf, 1, sizeof(buf), src);
+        if (r == 0) break;
+        if (std::fwrite(buf, 1, r, dst) != r) {
+            ok = false;
+            break;
+        }
+    }
+    std::fclose(dst);
+    std::fclose(src);
+    return ok;
+}
+
+// Al iniciar la app, si existe WiiU_Transfer_Update.wuhb:
+// - Si arrancamos desde Update, WiiU_Transfer.wuhb esta libre -> lo sobrescribimos automaticamente.
+// - Si arrancamos desde WiiU_Transfer.wuhb (ya actualizado), Update esta libre -> lo borramos.
+void ReconcileSdSelfUpdateOnBoot() {
+    FILE* alt = std::fopen(kSdWuhbAlt, "rb");
+    if (!alt) return;
+    std::fclose(alt);
+
+    if (CopyFileRaw(kSdWuhbAlt, kSdWuhbPath)) {
+        // Sobrescribio WiiU_Transfer.wuhb con exito (estamos corriendo desde Update)
+        return;
+    }
+    // Si WiiU_Transfer.wuhb estaba bloqueado (estamos corriendo desde el principal), borrar el Update sobrante
+    std::remove(kSdWuhbAlt);
+}
+
+bool FinalizeSdWuhbTemp(AppState& st, std::string& outErr, bool& outUsedAltSlot) {
     outErr.clear();
+    outUsedAltSlot = false;
     FILE* chk = std::fopen(kSdWuhbTmp, "rb");
     if (!chk) {
         outErr = "No se pudo abrir archivo temporal en SD.";
@@ -2574,73 +2615,32 @@ bool FinalizeSdWuhbTemp(AppState& st, std::string& outErr) {
         return false;
     }
 
-    // Metodo 1: rename directo (funciona si el .wuhb no esta bloqueado)
+    // Metodo 1: rename directo
     std::remove(kSdWuhbPath);
     if (std::rename(kSdWuhbTmp, kSdWuhbPath) == 0) {
         UpdateAllFreeSpace(st);
         return true;
     }
 
-    // Metodo 2: sobrescritura directa sobre el archivo existente (cuando Aroma mantiene abierto el .wuhb)
-    FILE* src = std::fopen(kSdWuhbTmp, "rb");
-    FILE* dst = std::fopen(kSdWuhbPath, "wb");
-    if (src && dst) {
-        uint8_t buf[64 * 1024];
-        bool copyOk = true;
-        while (true) {
-            size_t r = std::fread(buf, 1, sizeof(buf), src);
-            if (r == 0) break;
-            if (std::fwrite(buf, 1, r, dst) != r) {
-                copyOk = false;
-                break;
-            }
-        }
-        std::fclose(dst);
-        std::fclose(src);
-        if (copyOk) {
-            std::remove(kSdWuhbTmp);
-            UpdateAllFreeSpace(st);
-            return true;
-        }
-    } else {
-        if (src) std::fclose(src);
-        if (dst) std::fclose(dst);
+    // Metodo 2: sobrescritura directa sobre WiiU_Transfer.wuhb
+    if (CopyFileRaw(kSdWuhbTmp, kSdWuhbPath)) {
+        std::remove(kSdWuhbTmp);
+        UpdateAllFreeSpace(st);
+        return true;
     }
 
-    // Metodo 3: Mocha FSA directo sobre /vol/external01/wiiu/apps/WiiU_Transfer.wuhb
-    if (st.mochaUnlocked && st.fsaHandle >= 0) {
-        FILE* fSrc = std::fopen(kSdWuhbTmp, "rb");
-        FSAFileHandle fDst = 0;
-        FSError fErr = FSAOpenFileEx(
-            st.fsaHandle, "/vol/external01/wiiu/apps/WiiU_Transfer.wuhb", "wb",
-            static_cast<FSMode>(0x666), FS_OPEN_FLAG_NONE, 0, &fDst);
-        if (fSrc && fErr >= 0) {
-            auto* alignedBuf = static_cast<uint8_t*>(MEMAllocFromDefaultHeapEx(64 * 1024, 0x40));
-            bool copyOk = (alignedBuf != nullptr);
-            while (copyOk) {
-                size_t r = std::fread(alignedBuf, 1, 64 * 1024, fSrc);
-                if (r == 0) break;
-                DCFlushRange(alignedBuf, r);
-                if (FSAWriteFile(st.fsaHandle, alignedBuf, 1, static_cast<uint32_t>(r), fDst, 0) < 0) {
-                    copyOk = false;
-                    break;
-                }
-            }
-            if (alignedBuf) MEMFreeToDefaultHeap(alignedBuf);
-            FSACloseFile(st.fsaHandle, fDst);
-            std::fclose(fSrc);
-            if (copyOk) {
-                std::remove(kSdWuhbTmp);
-                UpdateAllFreeSpace(st);
-                return true;
-            }
-        } else {
-            if (fSrc) std::fclose(fSrc);
-        }
+    // Metodo 3 (Aroma bloquea el .wuhb en ejecucion con EBUSY/errno=16):
+    // Guardar en WiiU_Transfer_Update.wuhb; al abrirlo desde Home Menu reemplazara solo al anterior.
+    std::remove(kSdWuhbAlt);
+    if (std::rename(kSdWuhbTmp, kSdWuhbAlt) == 0 || CopyFileRaw(kSdWuhbTmp, kSdWuhbAlt)) {
+        std::remove(kSdWuhbTmp);
+        outUsedAltSlot = true;
+        UpdateAllFreeSpace(st);
+        return true;
     }
 
     char ebuf[80];
-    std::snprintf(ebuf, sizeof(ebuf), "No se pudo reemplazar en SD (errno=%d).", errno);
+    std::snprintf(ebuf, sizeof(ebuf), "No se pudo guardar en SD (errno=%d).", errno);
     outErr = ebuf;
     std::remove(kSdWuhbTmp);
     return false;
@@ -2660,7 +2660,7 @@ bool TryApplyAoaSdUpdate(wutui::UiCanvas& ui, AppState& st) {
     st.statusIsError = false;
     st.statusIsSuccess = false;
     st.statusLine = "Actualizando App Wii U en la SD (USB)...";
-    st.subStatusLine = "Recibiendo nueva version desde tu celular...";
+    st.subStatusLine = "Recibiendo nueva version desde tu Android...";
     st.progress = 0.0f;
     PresentDoubleBuffered(ui, st);
 
@@ -2690,12 +2690,15 @@ bool TryApplyAoaSdUpdate(wutui::UiCanvas& ui, AppState& st) {
     std::fclose(fp);
 
     std::string finErr;
-    if (ok && offset == updSize && FinalizeSdWuhbTemp(st, finErr)) {
+    bool usedAlt = false;
+    if (ok && offset == updSize && FinalizeSdWuhbTemp(st, finErr, usedAlt)) {
         st.progress = 1.0f;
         st.statusIsSuccess = true;
         st.statusIsError = false;
         st.statusLine = "App Wii U actualizada en la SD!";
-        st.subStatusLine = "Sal con [+] y vuelve a abrir para usar la nueva version.";
+        st.subStatusLine = usedAlt
+            ? "Sal con [+] y abre el icono actualizado para finalizar."
+            : "Sal con [+] y vuelve a abrir para usar la nueva version.";
         return true;
     }
 
@@ -2831,14 +2834,17 @@ private:
         std::fclose(fp);
 
         std::string finErr;
-        if (ok && gotTotal == sz && FinalizeSdWuhbTemp(st, finErr)) {
+        bool usedAlt = false;
+        if (ok && gotTotal == sz && FinalizeSdWuhbTemp(st, finErr, usedAlt)) {
             const char* okMsg = "OK\n";
             send(cli, okMsg, std::strlen(okMsg), 0);
             st.progress = 1.0f;
             st.statusIsSuccess = true;
             st.statusIsError = false;
             st.statusLine = "App Wii U actualizada en la SD!";
-            st.subStatusLine = "Sal con [+] y vuelve a abrir para usar la nueva version.";
+            st.subStatusLine = usedAlt
+                ? "Sal con [+] y abre el icono actualizado para finalizar."
+                : "Sal con [+] y vuelve a abrir para usar la nueva version.";
         } else {
             std::remove(kSdWuhbTmp);
             const char* err = "ERR_WRITE\n";
@@ -2881,6 +2887,7 @@ int main() {
 
     AppState st;
     bool sdMountedByUs = (WHBMountSdCard() != FALSE);
+    ReconcileSdSelfUpdateOnBoot();
 
     // Inicializar audio solo con Tema de Fondo (sin sonido de Pantalla Inicio)
     wutaudio::AudioManager audio;
@@ -2906,7 +2913,7 @@ int main() {
     audio.StartBgm();
 
     if (foundUsbOnBoot) {
-        // ScanUnifiedUsb ya configuró el mensaje de Memoria USB o Celular conectado
+        // ScanUnifiedUsb ya configuró el mensaje de Memoria USB o Android conectado
     } else if (foundPcOnBoot) {
         st.statusLine = "Conectado por Red a " + st.serverHost;
         st.subStatusLine = std::to_string(st.pkgs.size()) + " juego(s) listo(s) para instalar.";
@@ -3029,7 +3036,7 @@ int main() {
                     st.statusLine = std::string("Memoria USB detectada (") + st.usbFat.FsName() + ")";
                     st.subStatusLine = std::to_string(st.usbPkgs.size()) + " juego(s) listo(s) para instalar.";
                 } else if (st.source == PkgSource::AndroidMtp) {
-                    st.statusLine = "Celular conectado (" + st.mtpDeviceName + ")";
+                    st.statusLine = "Android conectado (" + st.mtpDeviceName + ")";
                     st.subStatusLine = std::to_string(st.mtpPkgs.size()) + " juego(s) listo(s) para instalar.";
                 } else {
                     st.statusLine = st.connected
@@ -3045,12 +3052,12 @@ int main() {
             st.statusIsError = false;
             st.statusIsSuccess = false;
             if (st.source != PkgSource::NetworkPc) {
-                st.statusLine = "Buscando Memoria USB o Celular Android...";
+                st.statusLine = "Buscando Memoria USB o Android...";
                 st.subStatusLine = "Detectando exFAT, FAT32, NTFS, FAT o Android...";
                 PresentDoubleBuffered(ui, st);
                 ScanUnifiedUsb(st);
             } else {
-                st.statusLine = "Buscando juegos en Red (PC o Celular)...";
+                st.statusLine = "Buscando juegos en Red (PC o Android)...";
                 st.subStatusLine.clear();
                 PresentDoubleBuffered(ui, st);
                 if (DiscoverServer(st)) {
@@ -3060,8 +3067,8 @@ int main() {
                     st.subStatusLine = std::to_string(st.pkgs.size()) + " juego(s) encontrado(s).";
                 } else {
                     st.statusIsError = true;
-                    st.statusLine = "No se encontro PC ni Celular en la Red.";
-                    st.subStatusLine = "Abre el programa en tu PC o App en tu Celular.";
+                    st.statusLine = "No se encontro PC ni Android en la Red.";
+                    st.subStatusLine = "Abre el programa en tu PC o App en tu Android.";
                 }
             }
             input.Flush();
