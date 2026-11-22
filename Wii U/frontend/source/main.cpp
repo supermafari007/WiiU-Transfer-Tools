@@ -2531,20 +2531,20 @@ int main() {
     ui.DrawSplashScreen();
     ui.Present();
 
+    // Iniciar sonido "Pantalla Inicio" de inmediato al abrir la app (solo carga 158 KB, <20 ms)
+    wutaudio::AudioManager audio;
+    audio.InitAxAndIntro();
+    gAudioMgr = &audio;
+    audio.StartIntro();
+
     InputManager input;
     input.Init();
 
     AppState st;
     bool sdMountedByUs = (WHBMountSdCard() != FALSE);
 
-    wutaudio::AudioManager audio;
-    audio.Init();
-    gAudioMgr = &audio;
-
-    OSTime splashStartTicks = OSGetSystemTime();
-    bool introStarted = audio.StartIntro();
-
-    // Mientras suena el tema de Pantalla Inicio, inicializamos Mocha, USB y Red
+    // Mientras suena "Pantalla Inicio" en la pantalla de carga, decodificamos BGM e inicializamos Mocha, USB y Red
+    audio.LoadBgm();
     InitMochaFsa(st);
     UpdateAllFreeSpace(st);
     bool foundUsbOnBoot = ScanUnifiedUsb(st);
@@ -2558,29 +2558,8 @@ int main() {
         }
     }
 
-    // Mantener la Pantalla de Inicio mientras suena el tema de inicio (o se pulse un botón tras 1.2s)
-    if (introStarted) {
-        input.Flush();
-        while (WHBProcIsRunning() && audio.IsIntroPlaying()) {
-            audio.Update(ui.HasForeground());
-            if (ui.ConsumeResumedFlag()) {
-                input.Flush();
-                ui.DrawSplashScreen();
-                ui.Present();
-                ui.DrawSplashScreen();
-                ui.Present();
-            }
-            if (OSTicksToMilliseconds(OSGetSystemTime() - splashStartTicks) >= 1200) {
-                InputSnapshot in = input.Poll(ui.HasForeground());
-                if ((in.triggered & (ACT_A | ACT_B | ACT_X | ACT_Y | ACT_EXIT)) != 0 || in.touchTap) {
-                    break;
-                }
-            }
-            OSSleepTicks(OSMillisecondsToTicks(16));
-        }
-    }
-
-    // Pasar al Tema de Fondo en bucle continuo mientras la app esté en uso
+    // Una vez lista la herramienta, pasar directo a la interfaz de uso (sin esperar ningun boton)
+    // y comenzar a reproducir "Tema de Fondo" en bucle continuo
     audio.StartBgm();
 
     if (foundUsbOnBoot) {

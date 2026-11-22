@@ -42,22 +42,37 @@ public:
     AudioManager& operator=(const AudioManager&) = delete;
 
     bool Init() {
-        if (axInit_) return true;
-
-        AXInitParams params{};
-        params.renderer = AX_INIT_RENDERER_48KHZ;
-        params.pipeline = AX_INIT_PIPELINE_SINGLE;
-        AXInitWithParams(&params);
-        axInit_ = true;
-
-        // Cargar Pantalla Inicio (intro.wia) y Tema de Fondo (bgm.wia)
-        introLoaded_ = LoadWiaTrack("/vol/content/intro.wia",
-                                    "fs:/vol/external01/wiiu/apps/WiiU_Transfer/intro.wia",
-                                    false, introTrack_);
-        bgmLoaded_   = LoadWiaTrack("/vol/content/bgm.wia",
-                                    "fs:/vol/external01/wiiu/apps/WiiU_Transfer/bgm.wia",
-                                    true, bgmTrack_);
+        if (!InitAxAndIntro()) return false;
+        LoadBgm();
         return true;
+    }
+
+    // Inicializa AX, carga solo intro.wia (~158 KB, <20 ms) para que Pantalla Inicio suene al instante
+    bool InitAxAndIntro() {
+        if (!axInit_) {
+            AXInitParams params{};
+            params.renderer = AX_INIT_RENDERER_48KHZ;
+            params.pipeline = AX_INIT_PIPELINE_SINGLE;
+            AXInitWithParams(&params);
+            axInit_ = true;
+        }
+        if (!introLoaded_) {
+            introLoaded_ = LoadWiaTrack("/vol/content/intro.wia",
+                                        "fs:/vol/external01/wiiu/apps/WiiU_Transfer/intro.wia",
+                                        false, introTrack_);
+        }
+        return true;
+    }
+
+    // Decodifica bgm.wia mientras ya suena Pantalla Inicio en segundo plano
+    bool LoadBgm() {
+        if (!axInit_) return false;
+        if (!bgmLoaded_) {
+            bgmLoaded_ = LoadWiaTrack("/vol/content/bgm.wia",
+                                      "fs:/vol/external01/wiiu/apps/WiiU_Transfer/bgm.wia",
+                                      true, bgmTrack_);
+        }
+        return bgmLoaded_;
     }
 
     void Shutdown() {

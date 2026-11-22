@@ -126,7 +126,7 @@ def make_splash_image(w: int, h: int, is_icon: bool) -> Image.Image:
         f_sub = ImageFont.load_default()
 
     title = "Wii U Transfer Tools"
-    sub = "Desarrollado por El Diuca  -  Ver. 2.0.0  (Modo USB / Modo Red)"
+    sub = "Desarrollado por El Diuca  -  Ver. 2.0.1  (Modo USB / Modo Red)"
     tb = draw.textbbox((0, 0), title, font=f_title)
     sb = draw.textbbox((0, 0), sub, font=f_sub)
     draw.text(((w - (tb[2] - tb[0])) // 2, int(h * 0.59)), title, fill=COL_WHITE, font=f_title)
