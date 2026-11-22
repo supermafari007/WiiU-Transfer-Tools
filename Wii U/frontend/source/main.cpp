@@ -2558,23 +2558,92 @@ constexpr uint16_t kSdUpdatePort = 7333;
 constexpr const char* kSdWuhbPath = "fs:/vol/external01/wiiu/apps/WiiU_Transfer.wuhb";
 constexpr const char* kSdWuhbTmp  = "fs:/vol/external01/wiiu/apps/WiiU_Transfer.wuhb.new";
 
-bool FinalizeSdWuhbTemp(AppState& st) {
+bool FinalizeSdWuhbTemp(AppState& st, std::string& outErr) {
+    outErr.clear();
     FILE* chk = std::fopen(kSdWuhbTmp, "rb");
-    if (!chk) return false;
+    if (!chk) {
+        outErr = "No se pudo abrir archivo temporal en SD.";
+        return false;
+    }
     uint8_t hdr[4]{};
     size_t n = std::fread(hdr, 1, 4, chk);
     std::fclose(chk);
     if (n != 4 || hdr[0] != 'W' || hdr[1] != 'U' || hdr[2] != 'H' || hdr[3] != 'B') {
         std::remove(kSdWuhbTmp);
+        outErr = "El archivo descargado no es un .wuhb valido.";
         return false;
     }
+
+    // Metodo 1: rename directo (funciona si el .wuhb no esta bloqueado)
     std::remove(kSdWuhbPath);
-    if (std::rename(kSdWuhbTmp, kSdWuhbPath) != 0) {
-        std::remove(kSdWuhbTmp);
-        return false;
+    if (std::rename(kSdWuhbTmp, kSdWuhbPath) == 0) {
+        UpdateAllFreeSpace(st);
+        return true;
     }
-    UpdateAllFreeSpace(st);
-    return true;
+
+    // Metodo 2: sobrescritura directa sobre el archivo existente (cuando Aroma mantiene abierto el .wuhb)
+    FILE* src = std::fopen(kSdWuhbTmp, "rb");
+    FILE* dst = std::fopen(kSdWuhbPath, "wb");
+    if (src && dst) {
+        uint8_t buf[64 * 1024];
+        bool copyOk = true;
+        while (true) {
+            size_t r = std::fread(buf, 1, sizeof(buf), src);
+            if (r == 0) break;
+            if (std::fwrite(buf, 1, r, dst) != r) {
+                copyOk = false;
+                break;
+            }
+        }
+        std::fclose(dst);
+        std::fclose(src);
+        if (copyOk) {
+            std::remove(kSdWuhbTmp);
+            UpdateAllFreeSpace(st);
+            return true;
+        }
+    } else {
+        if (src) std::fclose(src);
+        if (dst) std::fclose(dst);
+    }
+
+    // Metodo 3: Mocha FSA directo sobre /vol/external01/wiiu/apps/WiiU_Transfer.wuhb
+    if (st.mochaUnlocked && st.fsaHandle >= 0) {
+        FILE* fSrc = std::fopen(kSdWuhbTmp, "rb");
+        FSAFileHandle fDst = 0;
+        FSError fErr = FSAOpenFileEx(
+            st.fsaHandle, "/vol/external01/wiiu/apps/WiiU_Transfer.wuhb", "wb",
+            static_cast<FSMode>(0x666), FS_OPEN_FLAG_NONE, 0, &fDst);
+        if (fSrc && fErr >= 0) {
+            auto* alignedBuf = static_cast<uint8_t*>(MEMAllocFromDefaultHeapEx(64 * 1024, 0x40));
+            bool copyOk = (alignedBuf != nullptr);
+            while (copyOk) {
+                size_t r = std::fread(alignedBuf, 1, 64 * 1024, fSrc);
+                if (r == 0) break;
+                DCFlushRange(alignedBuf, r);
+                if (FSAWriteFile(st.fsaHandle, alignedBuf, 1, static_cast<uint32_t>(r), fDst, 0) < 0) {
+                    copyOk = false;
+                    break;
+                }
+            }
+            if (alignedBuf) MEMFreeToDefaultHeap(alignedBuf);
+            FSACloseFile(st.fsaHandle, fDst);
+            std::fclose(fSrc);
+            if (copyOk) {
+                std::remove(kSdWuhbTmp);
+                UpdateAllFreeSpace(st);
+                return true;
+            }
+        } else {
+            if (fSrc) std::fclose(fSrc);
+        }
+    }
+
+    char ebuf[80];
+    std::snprintf(ebuf, sizeof(ebuf), "No se pudo reemplazar en SD (errno=%d).", errno);
+    outErr = ebuf;
+    std::remove(kSdWuhbTmp);
+    return false;
 }
 
 bool TryApplyAoaSdUpdate(wutui::UiCanvas& ui, AppState& st) {
@@ -2620,7 +2689,8 @@ bool TryApplyAoaSdUpdate(wutui::UiCanvas& ui, AppState& st) {
     }
     std::fclose(fp);
 
-    if (ok && offset == updSize && FinalizeSdWuhbTemp(st)) {
+    std::string finErr;
+    if (ok && offset == updSize && FinalizeSdWuhbTemp(st, finErr)) {
         st.progress = 1.0f;
         st.statusIsSuccess = true;
         st.statusIsError = false;
@@ -2633,7 +2703,7 @@ bool TryApplyAoaSdUpdate(wutui::UiCanvas& ui, AppState& st) {
     st.statusIsError = true;
     st.statusIsSuccess = false;
     st.statusLine = "Error actualizando App en la SD.";
-    st.subStatusLine = "Revisa el espacio libre de tu tarjeta SD.";
+    st.subStatusLine = !finErr.empty() ? finErr : "Error recibiendo datos por USB.";
     return true;
 }
 
@@ -2760,7 +2830,8 @@ private:
         }
         std::fclose(fp);
 
-        if (ok && gotTotal == sz && FinalizeSdWuhbTemp(st)) {
+        std::string finErr;
+        if (ok && gotTotal == sz && FinalizeSdWuhbTemp(st, finErr)) {
             const char* okMsg = "OK\n";
             send(cli, okMsg, std::strlen(okMsg), 0);
             st.progress = 1.0f;
@@ -2775,7 +2846,7 @@ private:
             st.statusIsError = true;
             st.statusIsSuccess = false;
             st.statusLine = "Error actualizando App en la SD.";
-            st.subStatusLine = "Verifica la tarjeta SD e intenta nuevamente.";
+            st.subStatusLine = !finErr.empty() ? finErr : "Verifica la tarjeta SD e intenta nuevamente.";
         }
     }
 
