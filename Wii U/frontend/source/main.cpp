@@ -2602,7 +2602,8 @@ void HandleTouch(int x,
 constexpr uint16_t kSdUpdatePort = 7333;
 constexpr const char* kSdWuhbPath = "fs:/vol/external01/wiiu/apps/WiiU_Transfer.wuhb";
 constexpr const char* kSdWuhbTmp  = "fs:/vol/external01/wiiu/apps/WiiU_Transfer.wuhb.new";
-constexpr const char* kSdWuhbAlt  = "fs:/vol/external01/wiiu/apps/WiiU_Transfer_Update.wuhb";
+constexpr const char* kSdWuhbOldDup = "fs:/vol/external01/wiiu/apps/WiiU_Transfer_Update.wuhb";
+constexpr const char* kSdWuhbRoot = "fs:/vol/external01/WiiU_Transfer.wuhb";
 
 bool CopyFileRaw(const char* srcPath, const char* dstPath) {
     FILE* src = std::fopen(srcPath, "rb");
@@ -2627,25 +2628,15 @@ bool CopyFileRaw(const char* srcPath, const char* dstPath) {
     return ok;
 }
 
-// Al iniciar la app, si existe WiiU_Transfer_Update.wuhb:
-// - Si arrancamos desde Update, WiiU_Transfer.wuhb esta libre -> lo sobrescribimos automaticamente.
-// - Si arrancamos desde WiiU_Transfer.wuhb (ya actualizado), Update esta libre -> lo borramos.
+// Limpiar cualquier duplicado antiguo en /wiiu/apps/ para evitar conflictos de Aroma
 void ReconcileSdSelfUpdateOnBoot() {
-    FILE* alt = std::fopen(kSdWuhbAlt, "rb");
-    if (!alt) return;
-    std::fclose(alt);
-
-    if (CopyFileRaw(kSdWuhbAlt, kSdWuhbPath)) {
-        // Sobrescribio WiiU_Transfer.wuhb con exito (estamos corriendo desde Update)
-        return;
-    }
-    // Si WiiU_Transfer.wuhb estaba bloqueado (estamos corriendo desde el principal), borrar el Update sobrante
-    std::remove(kSdWuhbAlt);
+    std::remove(kSdWuhbOldDup);
+    std::remove(kSdWuhbTmp);
 }
 
-bool FinalizeSdWuhbTemp(AppState& st, std::string& outErr, bool& outUsedAltSlot) {
+bool FinalizeSdWuhbTemp(AppState& st, std::string& outErr, bool& outSavedToRoot) {
     outErr.clear();
-    outUsedAltSlot = false;
+    outSavedToRoot = false;
     FILE* chk = std::fopen(kSdWuhbTmp, "rb");
     if (!chk) {
         outErr = "No se pudo abrir archivo temporal en SD.";
@@ -2660,26 +2651,20 @@ bool FinalizeSdWuhbTemp(AppState& st, std::string& outErr, bool& outUsedAltSlot)
         return false;
     }
 
-    // Metodo 1: rename directo
+    // Metodo 1: intentar reemplazar directamente en /wiiu/apps/ si no esta bloqueado
     std::remove(kSdWuhbPath);
-    if (std::rename(kSdWuhbTmp, kSdWuhbPath) == 0) {
-        UpdateAllFreeSpace(st);
-        return true;
-    }
-
-    // Metodo 2: sobrescritura directa sobre WiiU_Transfer.wuhb
-    if (CopyFileRaw(kSdWuhbTmp, kSdWuhbPath)) {
+    if (std::rename(kSdWuhbTmp, kSdWuhbPath) == 0 || CopyFileRaw(kSdWuhbTmp, kSdWuhbPath)) {
         std::remove(kSdWuhbTmp);
         UpdateAllFreeSpace(st);
         return true;
     }
 
-    // Metodo 3 (Aroma bloquea el .wuhb en ejecucion con EBUSY/errno=16):
-    // Guardar en WiiU_Transfer_Update.wuhb; al abrirlo desde Home Menu reemplazara solo al anterior.
-    std::remove(kSdWuhbAlt);
-    if (std::rename(kSdWuhbTmp, kSdWuhbAlt) == 0 || CopyFileRaw(kSdWuhbTmp, kSdWuhbAlt)) {
+    // Metodo 2 (Aroma bloquea el .wuhb en ejecucion con EBUSY):
+    // NUNCA duplicar en /wiiu/apps/ (causa conflicto en Aroma); guardar en la raiz de la SD.
+    std::remove(kSdWuhbRoot);
+    if (std::rename(kSdWuhbTmp, kSdWuhbRoot) == 0 || CopyFileRaw(kSdWuhbTmp, kSdWuhbRoot)) {
         std::remove(kSdWuhbTmp);
-        outUsedAltSlot = true;
+        outSavedToRoot = true;
         UpdateAllFreeSpace(st);
         return true;
     }
@@ -2735,14 +2720,16 @@ bool TryApplyAoaSdUpdate(wutui::UiCanvas& ui, AppState& st) {
     std::fclose(fp);
 
     std::string finErr;
-    bool usedAlt = false;
-    if (ok && offset == updSize && FinalizeSdWuhbTemp(st, finErr, usedAlt)) {
+    bool savedRoot = false;
+    if (ok && offset == updSize && FinalizeSdWuhbTemp(st, finErr, savedRoot)) {
         st.progress = 1.0f;
         st.statusIsSuccess = true;
         st.statusIsError = false;
-        st.statusLine = "App Wii U actualizada en la SD!";
-        st.subStatusLine = usedAlt
-            ? "Sal con [+] y abre el icono actualizado para finalizar."
+        st.statusLine = savedRoot
+            ? "Descargado en raiz de SD (WiiU_Transfer.wuhb)"
+            : "App Wii U actualizada en la SD!";
+        st.subStatusLine = savedRoot
+            ? "Copialo a /wiiu/apps/ (Aroma protege el .wuhb abierto)."
             : "Sal con [+] y vuelve a abrir para usar la nueva version.";
         return true;
     }
@@ -2879,16 +2866,18 @@ private:
         std::fclose(fp);
 
         std::string finErr;
-        bool usedAlt = false;
-        if (ok && gotTotal == sz && FinalizeSdWuhbTemp(st, finErr, usedAlt)) {
+        bool savedRoot = false;
+        if (ok && gotTotal == sz && FinalizeSdWuhbTemp(st, finErr, savedRoot)) {
             const char* okMsg = "OK\n";
             send(cli, okMsg, std::strlen(okMsg), 0);
             st.progress = 1.0f;
             st.statusIsSuccess = true;
             st.statusIsError = false;
-            st.statusLine = "App Wii U actualizada en la SD!";
-            st.subStatusLine = usedAlt
-                ? "Sal con [+] y abre el icono actualizado para finalizar."
+            st.statusLine = savedRoot
+                ? "Descargado en raiz de SD (WiiU_Transfer.wuhb)"
+                : "App Wii U actualizada en la SD!";
+            st.subStatusLine = savedRoot
+                ? "Copialo a /wiiu/apps/ (Aroma protege el .wuhb abierto)."
                 : "Sal con [+] y vuelve a abrir para usar la nueva version.";
         } else {
             std::remove(kSdWuhbTmp);
