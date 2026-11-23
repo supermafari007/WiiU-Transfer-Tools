@@ -2600,10 +2600,11 @@ void HandleTouch(int x,
 // (Puerto TCP/UDP 7333 para PC y Android por Red + Canal USB directo AOA)
 // =========================================================================
 constexpr uint16_t kSdUpdatePort = 7333;
-constexpr const char* kSdWuhbPath = "fs:/vol/external01/wiiu/apps/WiiU_Transfer.wuhb";
-constexpr const char* kSdWuhbTmp  = "fs:/vol/external01/wiiu/apps/WiiU_Transfer.wuhb.new";
+constexpr const char* kSdWuhbPath   = "fs:/vol/external01/wiiu/apps/WiiU_Transfer.wuhb";
+constexpr const char* kSdWuhbTmp    = "fs:/vol/external01/wiiu/apps/WiiU_Transfer.wuhb.new";
 constexpr const char* kSdWuhbOldDup = "fs:/vol/external01/wiiu/apps/WiiU_Transfer_Update.wuhb";
-constexpr const char* kSdWuhbRoot = "fs:/vol/external01/WiiU_Transfer.wuhb";
+constexpr const char* kSdStageDir   = "fs:/vol/external01/wiiu/apps/.wiiu_transfer_stage";
+constexpr const char* kSdStageWuhb  = "fs:/vol/external01/wiiu/apps/.wiiu_transfer_stage/WiiU_Transfer.wuhb";
 
 bool CopyFileRaw(const char* srcPath, const char* dstPath) {
     FILE* src = std::fopen(srcPath, "rb");
@@ -2660,9 +2661,11 @@ bool FinalizeSdWuhbTemp(AppState& st, std::string& outErr, bool& outSavedToRoot)
     }
 
     // Metodo 2 (Aroma bloquea el .wuhb en ejecucion con EBUSY):
-    // NUNCA duplicar en /wiiu/apps/ (causa conflicto en Aroma); guardar en la raiz de la SD.
-    std::remove(kSdWuhbRoot);
-    if (std::rename(kSdWuhbTmp, kSdWuhbRoot) == 0 || CopyFileRaw(kSdWuhbTmp, kSdWuhbRoot)) {
+    // Guardar en la carpeta transitoria del plugin Aroma (.wiiu_transfer_stage)
+    // para que WiiU_Transfer_Updater.wps lo reemplace automaticamente al salir al Menu Wii U.
+    EnsureDirRecursive(kSdStageDir);
+    std::remove(kSdStageWuhb);
+    if (std::rename(kSdWuhbTmp, kSdStageWuhb) == 0 || CopyFileRaw(kSdWuhbTmp, kSdStageWuhb)) {
         std::remove(kSdWuhbTmp);
         outSavedToRoot = true;
         UpdateAllFreeSpace(st);
@@ -2726,10 +2729,10 @@ bool TryApplyAoaSdUpdate(wutui::UiCanvas& ui, AppState& st) {
         st.statusIsSuccess = true;
         st.statusIsError = false;
         st.statusLine = savedRoot
-            ? "Descargado en raiz de SD (WiiU_Transfer.wuhb)"
+            ? "Actualizacion lista! Sal con [+] al Menu Wii U."
             : "App Wii U actualizada en la SD!";
         st.subStatusLine = savedRoot
-            ? "Copialo a /wiiu/apps/ (Aroma protege el .wuhb abierto)."
+            ? "El plugin Aroma la reemplazara automaticamente al salir."
             : "Sal con [+] y vuelve a abrir para usar la nueva version.";
         return true;
     }
@@ -2874,10 +2877,10 @@ private:
             st.statusIsSuccess = true;
             st.statusIsError = false;
             st.statusLine = savedRoot
-                ? "Descargado en raiz de SD (WiiU_Transfer.wuhb)"
+                ? "Actualizacion lista! Sal con [+] al Menu Wii U."
                 : "App Wii U actualizada en la SD!";
             st.subStatusLine = savedRoot
-                ? "Copialo a /wiiu/apps/ (Aroma protege el .wuhb abierto)."
+                ? "El plugin Aroma la reemplazara automaticamente al salir."
                 : "Sal con [+] y vuelve a abrir para usar la nueva version.";
         } else {
             std::remove(kSdWuhbTmp);
