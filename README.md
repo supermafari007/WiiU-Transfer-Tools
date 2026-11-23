@@ -24,6 +24,7 @@ Este proyecto es **software de código abierto bajo la licencia MIT**. Consulta 
 
 ## Descargar la versión 2.0.3
 
+* **Pack Completo Todo-en-Uno (`.ZIP` con instructivo):** [WiiU_Transfer_Tools_Pack_Completo_v2.0.3.zip](https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.3/WiiU_Transfer_Tools_Pack_Completo_v2.0.3.zip) — incluye la estructura lista para copiar a la SD (`wiiu/apps/WiiU_Transfer.wuhb` + plugin Aroma `WiiU_Transfer_Updater.wps`), el instalador de PC Windows, el `.apk` de Android y `LEEME_INSTRUCTIVO.txt`.
 * **Wii U (Aroma):** [WiiU_Transfer.wuhb](https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.3/WiiU_Transfer.wuhb) — copiar en `sd:/wiiu/apps/WiiU_Transfer.wuhb`.
 * **Plugin Auto-Actualizador Aroma (Opcional recomendado):** [WiiU_Transfer_Updater.wps](https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.3/WiiU_Transfer_Updater.wps) — copiar en `sd:/wiiu/environments/aroma/plugins/WiiU_Transfer_Updater.wps`. Comprueba GitHub en segundo plano al iniciar Aroma y aplica automáticamente las actualizaciones enviadas desde Android o PC cuando la app está cerrada.
 * **PC (Windows 10/11 — Instalador único `.EXE`):** [WiiU_Transfer_Tools_Setup_v2.0.3.exe](https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.3/WiiU_Transfer_Tools_Setup_v2.0.3.exe) — instalación limpia sin consolas visibles, pregunta al finalizar si abrir el programa y desinstalador completo.
