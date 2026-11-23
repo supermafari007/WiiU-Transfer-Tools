@@ -48,7 +48,6 @@ constexpr const char* kWuhbRoot     = "fs:/vol/external01/WiiU_Transfer.wuhb";
 constexpr const char* kWuhbOldDup   = "fs:/vol/external01/wiiu/apps/WiiU_Transfer_Update.wuhb";
 constexpr const char* kVerFilePath  = "fs:/vol/external01/wiiu/apps/.wiiu_transfer_stage/version.txt";
 constexpr const char* kLogFilePath  = "fs:/vol/external01/wiiu/apps/.wiiu_transfer_stage/updater.log";
-constexpr const char* kFallbackVer  = "2.0.3";
 
 constexpr uint16_t kPushPort        = 7333;
 constexpr uint32_t kWorkerStackSize = 64 * 1024;
@@ -182,25 +181,65 @@ std::string ExtractJsonString(const std::string& json, const char* key) {
     return json.substr(pos, end - pos);
 }
 
-std::string ReadLocalVersion() {
+void ReadLocalStamp(std::string& outVer, long& outSize) {
+    outVer.clear();
+    outSize = 0;
     FILE* fp = std::fopen(kVerFilePath, "rb");
-    if (!fp) return {};
-    char buf[32]{};
+    if (!fp) return;
+    char buf[64]{};
     size_t n = std::fread(buf, 1, sizeof(buf) - 1, fp);
     std::fclose(fp);
     std::string s(buf, n);
     while (!s.empty() && (s.back() == '\r' || s.back() == '\n' || s.back() == ' ')) {
         s.pop_back();
     }
-    return s;
+    size_t bar = s.find('|');
+    if (bar != std::string::npos) {
+        outVer = s.substr(0, bar);
+        outSize = std::strtol(s.substr(bar + 1).c_str(), nullptr, 10);
+    } else {
+        outVer = s;
+    }
 }
 
-void WriteLocalVersion(const std::string& ver) {
+void WriteLocalStamp(const std::string& ver, long fileSize) {
     EnsureStageDir();
     FILE* fp = std::fopen(kVerFilePath, "wb");
     if (!fp) return;
-    std::fwrite(ver.data(), 1, ver.size(), fp);
+    std::fprintf(fp, "%s|%ld\n", ver.c_str(), fileSize);
     std::fclose(fp);
+}
+
+int CurlProgressCb(void* /*clientp*/, curl_off_t /*dltotal*/, curl_off_t /*dlnow*/,
+                   curl_off_t /*ultotal*/, curl_off_t /*ulnow*/) {
+    return gAbort.load() ? 1 : 0;
+}
+
+long FetchRemoteFileSizeHead(const std::string& url) {
+    CURL* h = curl_easy_init();
+    if (!h) return -1;
+    curl_easy_setopt(h, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(h, CURLOPT_USERAGENT, "WiiU-Transfer-Updater-Plugin/1.0");
+    curl_easy_setopt(h, CURLOPT_NOBODY, 1L);
+    curl_easy_setopt(h, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(h, CURLOPT_SSL_VERIFYPEER, 0L);
+    curl_easy_setopt(h, CURLOPT_SSL_VERIFYHOST, 0L);
+    curl_easy_setopt(h, CURLOPT_CONNECTTIMEOUT, 8L);
+    curl_easy_setopt(h, CURLOPT_TIMEOUT, 15L);
+    curl_easy_setopt(h, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(h, CURLOPT_XFERINFOFUNCTION, CurlProgressCb);
+
+    CURLcode res = curl_easy_perform(h);
+    long httpCode = 0;
+    curl_off_t cl = -1;
+    curl_easy_getinfo(h, CURLINFO_RESPONSE_CODE, &httpCode);
+    curl_easy_getinfo(h, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &cl);
+    curl_easy_cleanup(h);
+
+    if (res == CURLE_OK && httpCode == 200 && cl > 0) {
+        return static_cast<long>(cl);
+    }
+    return -1;
 }
 
 size_t CurlWriteStringCb(char* ptr, size_t size, size_t nmemb, void* userdata) {
@@ -216,11 +255,6 @@ size_t CurlWriteFileCb(char* ptr, size_t size, size_t nmemb, void* userdata) {
     if (gAbort.load()) return 0;
     auto* fp = static_cast<FILE*>(userdata);
     return std::fwrite(ptr, size, nmemb, fp);
-}
-
-int CurlProgressCb(void* /*clientp*/, curl_off_t /*dltotal*/, curl_off_t /*dlnow*/,
-                   curl_off_t /*ultotal*/, curl_off_t /*ulnow*/) {
-    return gAbort.load() ? 1 : 0;
 }
 
 bool SleepAbortableMs(int totalMs) {
@@ -286,14 +320,33 @@ void RunGitHubUpdateCheck() {
     if (remoteVer.empty()) return;
     if (wuhbUrl.empty()) wuhbUrl = kDefaultWuhbUrl;
 
-    bool wuhbExists = HasValidWuhbHeader(kWuhbPath);
-    std::string localVer = ReadLocalVersion();
-    if (localVer.empty() && wuhbExists) {
-        localVer = kFallbackVer;
-        WriteLocalVersion(localVer);
+    long localFileSize = 0;
+    bool wuhbExists = HasValidWuhbHeader(kWuhbPath, &localFileSize);
+    std::string localVer;
+    long stampedSize = 0;
+    ReadLocalStamp(localVer, stampedSize);
+
+    bool needDownload = false;
+    if (!wuhbExists) {
+        needDownload = true;
+    } else if (localVer.empty() || stampedSize <= 0 || localFileSize != stampedSize) {
+        // Primera vez con el plugin o el usuario copio una version distinta (ej. v1.0.0 / v2.0.0 / v2.0.2):
+        // comprobar el tamano exacto del .wuhb publicado en GitHub mediante HTTP HEAD
+        long remoteSize = FetchRemoteFileSizeHead(wuhbUrl);
+        if (gAbort.load()) return;
+        if (remoteSize > 0 && localFileSize == remoteSize) {
+            WriteLocalStamp(remoteVer, localFileSize);
+            std::string okMsg = "Verificado por tamano: ya tienes v" + remoteVer;
+            WriteLog(okMsg.c_str());
+            return;
+        }
+        // Si el tamano difiere (ej. v1.0.0 vs v2.0.3) o no pudo verificarse, actualizar automaticamente
+        needDownload = true;
+    } else if (IsRemoteNewer(localVer, remoteVer)) {
+        needDownload = true;
     }
 
-    if (wuhbExists && !IsRemoteNewer(localVer, remoteVer)) {
+    if (!needDownload) {
         std::string okMsg = "GitHub al dia: local=" + localVer + " remote=" + remoteVer;
         WriteLog(okMsg.c_str());
         return;
@@ -329,8 +382,10 @@ void RunGitHubUpdateCheck() {
     curl_easy_cleanup(dl);
     std::fclose(dlFp);
 
-    if (dlRes == CURLE_OK && dlHttp == 200 && !gAbort.load() && ReplaceWuhbSafely(kStageDlTmp)) {
-        WriteLocalVersion(remoteVer);
+    long newSize = 0;
+    if (dlRes == CURLE_OK && dlHttp == 200 && !gAbort.load() &&
+        HasValidWuhbHeader(kStageDlTmp, &newSize) && ReplaceWuhbSafely(kStageDlTmp)) {
+        WriteLocalStamp(remoteVer, newSize);
         std::string msg = "Actualizado WiiU_Transfer.wuhb a v" + remoteVer + " desde GitHub.";
         WriteLog(msg.c_str());
     } else {
