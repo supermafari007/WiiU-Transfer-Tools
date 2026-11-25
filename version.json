@@ -1,10 +1,11 @@
 {
-  "version": "2.0.3",
-  "release_date": "2026-11-22",
+  "version": "2.0.4",
+  "release_date": "2026-11-25",
   "author": "El Diuca",
   "repo": "https://github.com/supermafari007/WiiU-Transfer-Tools",
-  "wiiu_wuhb_url": "https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.3/WiiU_Transfer.wuhb",
-  "android_apk_url": "https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.3/WiiU_Transfer_Tools_Android.apk",
-  "pc_setup_url": "https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.3/WiiU_Transfer_Tools_Setup_v2.0.3.exe",
-  "notes": "Ver. 2.0.3: Carga de juegos desde cualquier carpeta del movil y Memoria USB (escaneo recursivo total), conexion USB directa AOA estable sin Depuracion USB, y actualizacion directa de WiiU_Transfer.wuhb en la SD desde Android y PC."
+  "wiiu_wuhb_url": "https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.4/WiiU_Transfer.wuhb",
+  "android_apk_url": "https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.4/WiiU_Transfer_Tools_Android.apk",
+  "pc_setup_url": "https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.4/WiiU_Transfer_Tools_Setup_v2.0.4.exe",
+  "notes": "Ver. 2.0.4: Soporte bilingue autonomo (Espanol / Ingles) en Wii U, PC e instalador y Android con boton sutil ES/EN, y Modo USB seleccionado por defecto al abrir en Wii U.",
+  "notes_en": "Ver. 2.0.4: Autonomous bilingual support (Spanish / English) across Wii U, PC + installer, and Android with subtle ES/EN toggle, plus USB Mode selected by default on Wii U boot."
 }

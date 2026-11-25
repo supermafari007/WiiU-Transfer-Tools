@@ -37,7 +37,7 @@ namespace {
 constexpr const char* kVersionJsonUrl =
     "https://raw.githubusercontent.com/supermafari007/WiiU-Transfer-Tools/main/version.json";
 constexpr const char* kDefaultWuhbUrl =
-    "https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.3/WiiU_Transfer.wuhb";
+    "https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.4/WiiU_Transfer.wuhb";
 
 constexpr const char* kAppsDir      = "fs:/vol/external01/wiiu/apps";
 constexpr const char* kStageDir     = "fs:/vol/external01/wiiu/apps/.wiiu_transfer_stage";

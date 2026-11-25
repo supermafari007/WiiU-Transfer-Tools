@@ -35,10 +35,16 @@ from wiiu_transfer_gui import (
     RoundedButton,
     RoundedCard,
     apply_dark_titlebar,
+    load_lang_pref,
 )
 
 UNINSTALL_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\WiiUTransferTools"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+_LANG = load_lang_pref()
+
+
+def _tr(es: str, en: str) -> str:
+    return en if _LANG == "en" else es
 
 
 def _silent_run(cmd: list[str]) -> subprocess.CompletedProcess:
@@ -119,10 +125,14 @@ def run_uninstall_flow() -> None:
     root = tk.Tk()
     root.withdraw()
     if not messagebox.askyesno(
-        "Desinstalar Wii U Transfer Tools",
-        "¿Deseas desinstalar por completo Wii U Transfer Tools de tu PC?\n\n"
-        "Se eliminará todo lo relacionado con el programa: carpeta de instalación, "
-        "accesos directos, reglas del Firewall y entrada en Windows.",
+        _tr("Desinstalar Wii U Transfer Tools", "Uninstall Wii U Transfer Tools"),
+        _tr(
+            "¿Deseas desinstalar por completo Wii U Transfer Tools de tu PC?\n\n"
+            "Se eliminará todo lo relacionado con el programa: carpeta de instalación, "
+            "accesos directos, reglas del Firewall y entrada en Windows.",
+            "Do you want to completely uninstall Wii U Transfer Tools from your PC?\n\n"
+            "All program files, shortcuts, Firewall rules, and Windows registry entries will be removed.",
+        ),
     ):
         root.destroy()
         return
@@ -199,8 +209,11 @@ def run_uninstall_flow() -> None:
         )
 
     messagebox.showinfo(
-        "Desinstalación completada",
-        "Wii U Transfer Tools y todos sus archivos han sido eliminados por completo de tu PC.",
+        _tr("Desinstalación completada", "Uninstall complete"),
+        _tr(
+            "Wii U Transfer Tools y todos sus archivos han sido eliminados por completo de tu PC.",
+            "Wii U Transfer Tools and all its files have been completely removed from your PC.",
+        ),
     )
     root.destroy()
 
@@ -208,7 +221,7 @@ def run_uninstall_flow() -> None:
 class InstallerWizard:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title(f"Instalador — Wii U Transfer Tools v{APP_VERSION}")
+        self.root.title(_tr(f"Instalador — Wii U Transfer Tools v{APP_VERSION}", f"Setup — Wii U Transfer Tools v{APP_VERSION}"))
         self.root.geometry("600x585")
         self.root.minsize(580, 565)
         self.root.resizable(False, False)
@@ -230,7 +243,10 @@ class InstallerWizard:
         self.var_desktop = tk.BooleanVar(value=True)
         self.var_startmenu = tk.BooleanVar(value=True)
         self.var_firewall = tk.BooleanVar(value=True)
-        self.var_status = tk.StringVar(value="Listo para instalar Wii U Transfer Tools en tu PC.")
+        self.var_status = tk.StringVar(value=_tr(
+            "Listo para instalar Wii U Transfer Tools en tu PC.",
+            "Ready to install Wii U Transfer Tools on your PC.",
+        ))
         self._installing = False
 
         self._build_ui()
@@ -243,14 +259,17 @@ class InstallerWizard:
         tbox.pack(side="left", pady=12)
         tk.Label(
             tbox,
-            text="Instalar Wii U Transfer Tools",
+            text=_tr("Instalar Wii U Transfer Tools", "Install Wii U Transfer Tools"),
             bg=COL_HEADER,
             fg="#FFFFFF",
             font=("Segoe UI", 15, "bold"),
         ).pack(anchor="w")
         tk.Label(
             tbox,
-            text=f"Versión {APP_VERSION}  •  Desarrollado por El Diuca",
+            text=_tr(
+                f"Versión {APP_VERSION}  •  Desarrollado por El Diuca",
+                f"Version {APP_VERSION}  •  Developed by El Diuca",
+            ),
             bg=COL_HEADER,
             fg="#A8D8EC",
             font=("Segoe UI", 9, "bold"),
@@ -265,7 +284,7 @@ class InstallerWizard:
         dir_card.pack_propagate(False)
         tk.Label(
             dir_card.inner,
-            text="Carpeta donde se instalará el programa:",
+            text=_tr("Carpeta donde se instalará el programa:", "Installation folder:"),
             bg=COL_CARD,
             fg=COL_TEXT,
             font=("Segoe UI", 9, "bold"),
@@ -284,22 +303,22 @@ class InstallerWizard:
             highlightthickness=1,
             font=("Segoe UI", 9),
         ).pack(side="left", fill="x", expand=True, ipady=5, padx=(0, 8))
-        RoundedButton(drow, "Cambiar...", self._choose_dir, width=96, height=30).pack(side="right")
+        RoundedButton(drow, _tr("Cambiar...", "Browse..."), self._choose_dir, width=96, height=30).pack(side="right")
 
         opt_card = RoundedCard(body, bg_outer=COL_BG, fill=COL_CARD, radius=10, pad=14, height=160)
         opt_card.pack(fill="x", pady=(0, 12))
         opt_card.pack_propagate(False)
         tk.Label(
             opt_card.inner,
-            text="Opciones de instalación:",
+            text=_tr("Opciones de instalación:", "Installation options:"),
             bg=COL_CARD,
             fg=COL_CYAN_HI,
             font=("Segoe UI", 10, "bold"),
         ).pack(anchor="w", pady=(0, 6))
 
-        self._add_checkbox(opt_card.inner, "Crear icono de acceso directo en el Escritorio", self.var_desktop)
-        self._add_checkbox(opt_card.inner, "Agregar al Menú Inicio (con Desinstalador)", self.var_startmenu)
-        self._add_checkbox(opt_card.inner, "Permitir conexión con la Wii U en el Firewall de Windows", self.var_firewall)
+        self._add_checkbox(opt_card.inner, _tr("Crear icono de acceso directo en el Escritorio", "Create Desktop shortcut"), self.var_desktop)
+        self._add_checkbox(opt_card.inner, _tr("Agregar al Menú Inicio (con Desinstalador)", "Add to Start Menu (with Uninstaller)"), self.var_startmenu)
+        self._add_checkbox(opt_card.inner, _tr("Permitir conexión con la Wii U en el Firewall de Windows", "Allow Wii U connection in Windows Firewall"), self.var_firewall)
 
         prog_card = RoundedCard(body, bg_outer=COL_BG, fill=COL_CARD, radius=10, pad=12, height=66)
         prog_card.pack(fill="x", pady=(0, 14))
@@ -321,13 +340,13 @@ class InstallerWizard:
         btn_bar = tk.Frame(body, bg=COL_BG)
         btn_bar.pack(fill="x")
         RoundedButton(
-            btn_bar, "Cancelar", self.root.destroy, width=120, height=38, radius=9,
+            btn_bar, _tr("Cancelar", "Cancel"), self.root.destroy, width=120, height=38, radius=9,
             bg_outer=COL_BG, fill=COL_BTN_BG, hover=COL_BTN_HV, border=COL_BORDER,
             fg=COL_TEXT, font=("Segoe UI", 10, "bold"),
         ).pack(side="left")
 
         RoundedButton(
-            btn_bar, "Instalar Ahora", self._run_install, width=190, height=38, radius=9,
+            btn_bar, _tr("Instalar Ahora", "Install Now"), self._run_install, width=190, height=38, radius=9,
             bg_outer=COL_BG, fill=COL_GREEN, hover=COL_GREEN_HV, border=None,
             fg="#FFFFFF", font=("Segoe UI", 10, "bold"),
         ).pack(side="right")
@@ -423,16 +442,22 @@ class InstallerWizard:
                         ]
                     )
 
-            self._set_progress(1.0, "¡Instalación completada!")
+            self._set_progress(1.0, _tr("¡Instalación completada!", "Installation complete!"))
             self.lbl_status.configure(fg=COL_GREEN_HI)
             self.root.update()
 
             lanzar = messagebox.askyesno(
-                "Instalación completada",
-                f"Wii U Transfer Tools v{APP_VERSION} se instaló correctamente.\n\n"
-                "Ya tienes el icono en el Escritorio y Menú Inicio, y puedes desinstalarlo "
-                "cuando quieras desde Aplicaciones instaladas de Windows.\n\n"
-                "¿Deseas abrir Wii U Transfer Tools ahora?",
+                _tr("Instalación completada", "Installation complete"),
+                _tr(
+                    f"Wii U Transfer Tools v{APP_VERSION} se instaló correctamente.\n\n"
+                    "Ya tienes el icono en el Escritorio y Menú Inicio, y puedes desinstalarlo "
+                    "cuando quieras desde Aplicaciones instaladas de Windows.\n\n"
+                    "¿Deseas abrir Wii U Transfer Tools ahora?",
+                    f"Wii U Transfer Tools v{APP_VERSION} has been installed successfully.\n\n"
+                    "Shortcuts were created on your Desktop and Start Menu, and you can uninstall it "
+                    "anytime from Windows Installed Apps.\n\n"
+                    "Do you want to launch Wii U Transfer Tools now?",
+                ),
                 parent=self.root,
             )
             self.root.destroy()

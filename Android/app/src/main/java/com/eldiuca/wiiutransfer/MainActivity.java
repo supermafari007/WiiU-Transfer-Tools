@@ -71,11 +71,11 @@ import java.util.zip.ZipInputStream;
  */
 public class MainActivity extends Activity {
 
-    public static final String APP_VERSION = "2.0.3";
+    public static final String APP_VERSION = "2.0.4";
     public static final String GITHUB_REPO_URL = "https://github.com/supermafari007/WiiU-Transfer-Tools";
     public static final String VERSION_JSON_URL = "https://raw.githubusercontent.com/supermafari007/WiiU-Transfer-Tools/main/version.json";
-    public static final String DEFAULT_APK_URL = "https://raw.githubusercontent.com/supermafari007/WiiU-Transfer-Tools/main/Android/WiiU_Transfer_Tools_Android.apk";
-    public static final String DEFAULT_WUHB_URL = "https://raw.githubusercontent.com/supermafari007/WiiU-Transfer-Tools/main/Wii%20U/WiiU_Transfer.wuhb";
+    public static final String DEFAULT_APK_URL = "https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.4/WiiU_Transfer_Tools_Android.apk";
+    public static final String DEFAULT_WUHB_URL = "https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.4/WiiU_Transfer.wuhb";
 
     // Paleta Oscura Oficial Wii U Transfer Tools
     private static final int COL_BG        = Color.parseColor("#0F141B");
@@ -124,13 +124,20 @@ public class MainActivity extends Activity {
     private String remoteNotes = "";
     private boolean updateAvailable = false;
 
+    // Idioma autónomo (ES / EN) + botón sutil en cabecera
+    private boolean isEnglish = false;
+
     // Vistas de UI
+    private TextView headerSubText;
+    private TextView btnLangPill;
+    private TextView btnInfoPill;
     private LinearLayout headerPillLayout;
     private View headerPillDot;
     private TextView headerPillText;
 
     private LinearLayout updateBannerLayout;
     private TextView updateBannerText;
+    private TextView btnBannerUpdateView;
 
     private TextView tabUsbMtp;
     private TextView tabNetMode;
@@ -140,8 +147,11 @@ public class MainActivity extends Activity {
     private TextView connTitleText;
     private TextView connSubText;
     private TextView folderPathText;
+    private TextView btnChangeFolderView;
 
     private TextView pkgHeaderCountText;
+    private TextView btnAddGameView;
+    private TextView btnRefreshListView;
     private TextView btnAllToggle;
     private LinearLayout pkgListContainer;
 
@@ -181,9 +191,52 @@ public class MainActivity extends Activity {
         }
     };
 
+    private String tr(String es, String en) {
+        return isEnglish ? en : es;
+    }
+
+    private void initLanguage() {
+        String saved = getSharedPreferences("wiiu_transfer_prefs", MODE_PRIVATE).getString("lang", null);
+        if ("en".equals(saved)) {
+            isEnglish = true;
+        } else if ("es".equals(saved)) {
+            isEnglish = false;
+        } else {
+            String sysLang = Locale.getDefault().getLanguage();
+            isEnglish = !"es".equalsIgnoreCase(sysLang);
+        }
+    }
+
+    private void toggleLanguage() {
+        isEnglish = !isEnglish;
+        getSharedPreferences("wiiu_transfer_prefs", MODE_PRIVATE)
+                .edit().putString("lang", isEnglish ? "en" : "es").apply();
+        applyLanguageToUi();
+    }
+
+    private void applyLanguageToUi() {
+        if (headerSubText != null) headerSubText.setText(tr("por El Diuca  \u2022  v" + APP_VERSION, "by El Diuca  \u2022  v" + APP_VERSION));
+        if (btnLangPill != null) btnLangPill.setText(isEnglish ? "EN" : "ES");
+        if (btnInfoPill != null) btnInfoPill.setText("i Info");
+        if (btnBannerUpdateView != null) btnBannerUpdateView.setText(tr("Actualizar", "Update"));
+        if (updateBannerText != null && updateAvailable) {
+            updateBannerText.setText(tr("\u00a1Nueva versi\u00f3n v" + latestRemoteVersion + " disponible en GitHub!",
+                    "New version v" + latestRemoteVersion + " available on GitHub!"));
+        }
+        if (tabUsbMtp != null) tabUsbMtp.setText(tr("Modo USB (Cable)", "USB Mode (Cable)"));
+        if (tabNetMode != null) tabNetMode.setText(tr("Modo Red (Wi-Fi)", "Network Mode (Wi-Fi)"));
+        if (btnChangeFolderView != null) btnChangeFolderView.setText(tr("Cambiar", "Change"));
+        if (btnAddGameView != null) btnAddGameView.setText(tr("+ A\u00f1adir Juego", "+ Add Game"));
+        if (btnRefreshListView != null) btnRefreshListView.setText(tr("Actualizar lista", "Refresh list"));
+        updateConnectionCardUi();
+        rebuildPackageListViews();
+        updateBottomSummaryUi();
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        initLanguage();
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             Window w = getWindow();
@@ -348,32 +401,51 @@ public class MainActivity extends Activity {
         titleTv.setSingleLine(true);
         titleCol.addView(titleTv);
 
-        TextView subTv = new TextView(this);
-        subTv.setText("por El Diuca  \u2022  v" + APP_VERSION);
-        subTv.setTextColor(COL_CYAN_SUB);
-        subTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
-        subTv.setSingleLine(true);
-        titleCol.addView(subTv);
+        headerSubText = new TextView(this);
+        headerSubText.setText(tr("por El Diuca  \u2022  v" + APP_VERSION, "by El Diuca  \u2022  v" + APP_VERSION));
+        headerSubText.setTextColor(COL_CYAN_SUB);
+        headerSubText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+        headerSubText.setSingleLine(true);
+        titleCol.addView(headerSubText);
         header.addView(titleCol, titleColLp);
 
+        // Botón sutil de Idioma (ES / EN)
+        btnLangPill = new TextView(this);
+        btnLangPill.setText(isEnglish ? "EN" : "ES");
+        btnLangPill.setTextColor(COL_CYAN_SUB);
+        btnLangPill.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+        btnLangPill.setTypeface(Typeface.DEFAULT_BOLD);
+        btnLangPill.setGravity(Gravity.CENTER);
+        btnLangPill.setPadding(dp(9), dp(6), dp(9), dp(6));
+        btnLangPill.setBackground(roundedShape(COL_PILL_OFF, dp(14), dp(1), COL_CYAN));
+        btnLangPill.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                toggleLanguage();
+            }
+        });
+        LinearLayout.LayoutParams langLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        langLp.rightMargin = dp(5);
+        header.addView(btnLangPill, langLp);
+
         // Botón "i Info" (Acerca de / Actualizaciones / GitHub)
-        TextView btnInfo = new TextView(this);
-        btnInfo.setText("i Info");
-        btnInfo.setTextColor(COL_CYAN_SUB);
-        btnInfo.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
-        btnInfo.setTypeface(Typeface.DEFAULT_BOLD);
-        btnInfo.setGravity(Gravity.CENTER);
-        btnInfo.setPadding(dp(10), dp(6), dp(10), dp(6));
-        btnInfo.setBackground(roundedShape(COL_PILL_OFF, dp(14), dp(1), COL_CYAN));
-        btnInfo.setOnClickListener(new View.OnClickListener() {
+        btnInfoPill = new TextView(this);
+        btnInfoPill.setText("i Info");
+        btnInfoPill.setTextColor(COL_CYAN_SUB);
+        btnInfoPill.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+        btnInfoPill.setTypeface(Typeface.DEFAULT_BOLD);
+        btnInfoPill.setGravity(Gravity.CENTER);
+        btnInfoPill.setPadding(dp(10), dp(6), dp(10), dp(6));
+        btnInfoPill.setBackground(roundedShape(COL_PILL_OFF, dp(14), dp(1), COL_CYAN));
+        btnInfoPill.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 showAboutDialog();
             }
         });
         LinearLayout.LayoutParams infoLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        infoLp.rightMargin = dp(6);
-        header.addView(btnInfo, infoLp);
+        infoLp.rightMargin = dp(5);
+        header.addView(btnInfoPill, infoLp);
 
         // Cápsula estado derecha
         headerPillLayout = new LinearLayout(this);
@@ -427,20 +499,20 @@ public class MainActivity extends Activity {
         updateBannerText.setTypeface(Typeface.DEFAULT_BOLD);
         updateBannerLayout.addView(updateBannerText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        TextView btnBannerUpdate = new TextView(this);
-        btnBannerUpdate.setText("Actualizar");
-        btnBannerUpdate.setTextColor(Color.parseColor("#111827"));
-        btnBannerUpdate.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
-        btnBannerUpdate.setTypeface(Typeface.DEFAULT_BOLD);
-        btnBannerUpdate.setPadding(dp(10), dp(5), dp(10), dp(5));
-        btnBannerUpdate.setBackground(roundedShape(COL_AMBER_BD, dp(8), 0, 0));
-        btnBannerUpdate.setOnClickListener(new View.OnClickListener() {
+        btnBannerUpdateView = new TextView(this);
+        btnBannerUpdateView.setText(tr("Actualizar", "Update"));
+        btnBannerUpdateView.setTextColor(Color.parseColor("#111827"));
+        btnBannerUpdateView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+        btnBannerUpdateView.setTypeface(Typeface.DEFAULT_BOLD);
+        btnBannerUpdateView.setPadding(dp(10), dp(5), dp(10), dp(5));
+        btnBannerUpdateView.setBackground(roundedShape(COL_AMBER_BD, dp(8), 0, 0));
+        btnBannerUpdateView.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 showAboutDialog();
             }
         });
-        updateBannerLayout.addView(btnBannerUpdate);
+        updateBannerLayout.addView(btnBannerUpdateView);
 
         LinearLayout.LayoutParams ubLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         ubLp.bottomMargin = dp(10);
@@ -453,7 +525,7 @@ public class MainActivity extends Activity {
         segBar.setBackground(roundedShape(COL_PILL_OFF, dp(22), dp(1), COL_BORDER));
 
         tabUsbMtp = new TextView(this);
-        tabUsbMtp.setText("Modo USB (Cable)");
+        tabUsbMtp.setText(tr("Modo USB (Cable)", "USB Mode (Cable)"));
         tabUsbMtp.setGravity(Gravity.CENTER);
         tabUsbMtp.setPadding(dp(8), dp(9), dp(8), dp(9));
         tabUsbMtp.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
@@ -466,7 +538,7 @@ public class MainActivity extends Activity {
         segBar.addView(tabUsbMtp, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         tabNetMode = new TextView(this);
-        tabNetMode.setText("Modo Red (Wi-Fi)");
+        tabNetMode.setText(tr("Modo Red (Wi-Fi)", "Network Mode (Wi-Fi)"));
         tabNetMode.setGravity(Gravity.CENTER);
         tabNetMode.setPadding(dp(8), dp(9), dp(8), dp(9));
         tabNetMode.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
@@ -528,34 +600,34 @@ public class MainActivity extends Activity {
         folderPathText.setEllipsize(TextUtils.TruncateAt.MIDDLE);
         folderBox.addView(folderPathText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        TextView btnChangeFolder = new TextView(this);
-        btnChangeFolder.setText("Cambiar");
-        btnChangeFolder.setTextColor(COL_TEXT);
-        btnChangeFolder.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
-        btnChangeFolder.setTypeface(Typeface.DEFAULT_BOLD);
-        btnChangeFolder.setPadding(dp(10), dp(5), dp(10), dp(5));
-        btnChangeFolder.setBackground(roundedShape(COL_BTN_OFF, dp(6), dp(1), COL_BORDER));
-        btnChangeFolder.setOnClickListener(new View.OnClickListener() {
+        btnChangeFolderView = new TextView(this);
+        btnChangeFolderView.setText(tr("Cambiar", "Change"));
+        btnChangeFolderView.setTextColor(COL_TEXT);
+        btnChangeFolderView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+        btnChangeFolderView.setTypeface(Typeface.DEFAULT_BOLD);
+        btnChangeFolderView.setPadding(dp(10), dp(5), dp(10), dp(5));
+        btnChangeFolderView.setBackground(roundedShape(COL_BTN_OFF, dp(6), dp(1), COL_BORDER));
+        btnChangeFolderView.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 showChangeFolderDialog();
             }
         });
-        folderBox.addView(btnChangeFolder);
+        folderBox.addView(btnChangeFolderView);
         connectionCard.addView(folderBox);
 
         LinearLayout.LayoutParams ccLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         ccLp.bottomMargin = dp(10);
         content.addView(connectionCard, ccLp);
 
-        // 4. TARJETA LISTA DE JUEGOS EN EL CELULAR
+        // 4. TARJETA LISTA DE JUEGOS EN ANDROID
         LinearLayout pkgCard = new LinearLayout(this);
         pkgCard.setOrientation(LinearLayout.VERTICAL);
         pkgCard.setPadding(dp(14), dp(12), dp(14), dp(12));
         pkgCard.setBackground(roundedShape(COL_CARD, dp(16), dp(1), COL_BORDER));
 
         pkgHeaderCountText = new TextView(this);
-        pkgHeaderCountText.setText("Juegos en Android (0)");
+        pkgHeaderCountText.setText(tr("Juegos en Android (0)", "Games on Android (0)"));
         pkgHeaderCountText.setTextColor(COL_TEXT);
         pkgHeaderCountText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
         pkgHeaderCountText.setTypeface(Typeface.DEFAULT_BOLD);
@@ -567,15 +639,15 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams brLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         brLp.topMargin = dp(8);
 
-        TextView btnAddGame = new TextView(this);
-        btnAddGame.setText("+ A\u00f1adir Juego");
-        btnAddGame.setTextColor(COL_TEXT);
-        btnAddGame.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
-        btnAddGame.setTypeface(Typeface.DEFAULT_BOLD);
-        btnAddGame.setGravity(Gravity.CENTER);
-        btnAddGame.setPadding(dp(10), dp(7), dp(10), dp(7));
-        btnAddGame.setBackground(roundedShape(COL_BTN_OFF, dp(8), dp(1), COL_BORDER));
-        btnAddGame.setOnClickListener(new View.OnClickListener() {
+        btnAddGameView = new TextView(this);
+        btnAddGameView.setText(tr("+ A\u00f1adir Juego", "+ Add Game"));
+        btnAddGameView.setTextColor(COL_TEXT);
+        btnAddGameView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+        btnAddGameView.setTypeface(Typeface.DEFAULT_BOLD);
+        btnAddGameView.setGravity(Gravity.CENTER);
+        btnAddGameView.setPadding(dp(10), dp(7), dp(10), dp(7));
+        btnAddGameView.setBackground(roundedShape(COL_BTN_OFF, dp(8), dp(1), COL_BORDER));
+        btnAddGameView.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 showAddGameDialog();
@@ -583,28 +655,29 @@ public class MainActivity extends Activity {
         });
         LinearLayout.LayoutParams addLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.15f);
         addLp.rightMargin = dp(6);
-        pkgBtnRow.addView(btnAddGame, addLp);
+        pkgBtnRow.addView(btnAddGameView, addLp);
 
-        TextView btnRefreshList = new TextView(this);
-        btnRefreshList.setText("Actualizar lista");
-        btnRefreshList.setTextColor(Color.WHITE);
-        btnRefreshList.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
-        btnRefreshList.setTypeface(Typeface.DEFAULT_BOLD);
-        btnRefreshList.setGravity(Gravity.CENTER);
-        btnRefreshList.setPadding(dp(10), dp(7), dp(10), dp(7));
-        btnRefreshList.setBackground(roundedShape(COL_CYAN_LT, dp(8), dp(1), COL_CYAN));
-        btnRefreshList.setOnClickListener(new View.OnClickListener() {
+        btnRefreshListView = new TextView(this);
+        btnRefreshListView.setText(tr("Actualizar lista", "Refresh list"));
+        btnRefreshListView.setTextColor(Color.WHITE);
+        btnRefreshListView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+        btnRefreshListView.setTypeface(Typeface.DEFAULT_BOLD);
+        btnRefreshListView.setGravity(Gravity.CENTER);
+        btnRefreshListView.setPadding(dp(10), dp(7), dp(10), dp(7));
+        btnRefreshListView.setBackground(roundedShape(COL_CYAN_LT, dp(8), dp(1), COL_CYAN));
+        btnRefreshListView.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 refreshPackages();
                 Toast.makeText(MainActivity.this,
-                        "Lista actualizada (" + packages.size() + " juego" + (packages.size() == 1 ? "" : "s") + ")",
+                        tr("Lista actualizada (" + packages.size() + " juego" + (packages.size() == 1 ? "" : "s") + ")",
+                           "List refreshed (" + packages.size() + " game" + (packages.size() == 1 ? "" : "s") + ")"),
                         Toast.LENGTH_SHORT).show();
             }
         });
         LinearLayout.LayoutParams refLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.15f);
         refLp.rightMargin = dp(6);
-        pkgBtnRow.addView(btnRefreshList, refLp);
+        pkgBtnRow.addView(btnRefreshListView, refLp);
 
         btnAllToggle = new TextView(this);
         btnAllToggle.setText("Todos");
@@ -858,18 +931,24 @@ public class MainActivity extends Activity {
 
     private void rebuildPackageListViews() {
         pkgListContainer.removeAllViews();
-        pkgHeaderCountText.setText("Juegos en Android (" + packages.size() + ")");
+        pkgHeaderCountText.setText(tr("Juegos en Android (" + packages.size() + ")", "Games on Android (" + packages.size() + ")"));
 
         int markedCount = 0;
         for (NfsaTransferServer.WupPackage p : packages) {
             if (p.marked) markedCount++;
         }
         boolean allMarked = (!packages.isEmpty() && markedCount == packages.size());
-        btnAllToggle.setText(allMarked ? "Limpiar" : "Todos");
+        btnAllToggle.setText(allMarked ? tr("Limpiar", "Clear") : tr("Todos", "All"));
 
-        String shortFolder = activeFolder.getAbsolutePath()
-                .replace(Environment.getExternalStorageDirectory().getAbsolutePath(), "/ almacenamiento");
-        folderPathText.setText("Carpeta de juegos:  " + shortFolder);
+        if (scanWholePhone) {
+            folderPathText.setText(tr("Carpeta de juegos:  Todo Android (cualquier carpeta)",
+                    "Games folder:  All Android storage (any folder)"));
+        } else {
+            String shortFolder = activeFolder.getAbsolutePath()
+                    .replace(Environment.getExternalStorageDirectory().getAbsolutePath(),
+                            tr("/ almacenamiento", "/ storage"));
+            folderPathText.setText(tr("Carpeta de juegos:  ", "Games folder:  ") + shortFolder);
+        }
 
         if (packages.isEmpty()) {
             LinearLayout emptyBox = new LinearLayout(this);
@@ -878,14 +957,16 @@ public class MainActivity extends Activity {
             emptyBox.setBackground(roundedShape(COL_BOX_SOFT, dp(12), dp(1), COL_BORDER));
 
             TextView emptyTitle = new TextView(this);
-            emptyTitle.setText("No hay juegos en " + activeFolder.getName());
+            emptyTitle.setText(tr("No hay juegos en " + activeFolder.getName(), "No games found in " + activeFolder.getName()));
             emptyTitle.setTextColor(COL_TEXT);
             emptyTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f);
             emptyTitle.setTypeface(Typeface.DEFAULT_BOLD);
             emptyBox.addView(emptyTitle);
 
             TextView emptySub = new TextView(this);
-            emptySub.setText("Pulsa '+ A\u00f1adir Juego' para importar o descomprimir un .ZIP, o copia tus carpetas de juegos dentro de /WiiU_Transfer o /Download.");
+            emptySub.setText(tr(
+                    "Pulsa '+ A\u00f1adir Juego' para importar o descomprimir un .ZIP, o copia tus carpetas de juegos dentro de /WiiU_Transfer o /Download.",
+                    "Tap '+ Add Game' to import or extract a .ZIP, or copy your WUP game folders into /WiiU_Transfer or /Download."));
             emptySub.setTextColor(COL_MUTED);
             emptySub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
             LinearLayout.LayoutParams esLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -941,7 +1022,9 @@ public class MainActivity extends Activity {
             nameTv.setEllipsize(TextUtils.TruncateAt.END);
             infoCol.addView(nameTv);
 
-            String stateDesc = pkg.hasTmd ? "Juego completo" : "Carpeta de archivos";
+            String stateDesc = pkg.hasTmd
+                    ? tr("Juego completo", "Full game")
+                    : tr("Carpeta de archivos", "File folder");
             TextView subInfoTv = new TextView(this);
             subInfoTv.setText(NfsaTransferServer.formatBytes(pkg.totalBytes) + "  \u2022  " + stateDesc);
             subInfoTv.setTextColor(isStreamingThis ? COL_CYAN_DK : COL_MUTED);
@@ -952,8 +1035,8 @@ public class MainActivity extends Activity {
             // Insignia simple (COPIANDO / SELECCIONADO / DISPONIBLE)
             TextView badge = new TextView(this);
             String badgeTxt = isStreamingThis
-                    ? "COPIANDO"
-                    : (pkg.marked ? "SELECCIONADO" : "DISPONIBLE");
+                    ? tr("COPIANDO", "COPYING")
+                    : (pkg.marked ? tr("SELECCIONADO", "SELECTED") : tr("DISPONIBLE", "READY"));
             int badgeCol = isStreamingThis ? COL_CYAN : (pkg.marked ? COL_GREEN : COL_BTN_OFF);
             badge.setText(badgeTxt);
             badge.setTextColor(Color.WHITE);
@@ -1005,44 +1088,49 @@ public class MainActivity extends Activity {
 
         if (isUsbMtpTab) {
             boolean aoaConn = (aoaServer != null && aoaServer.isConnected());
-            connTagText.setText("CONECTAR POR CABLE USB DIRECTO (AOA)");
+            connTagText.setText(tr("CONECTAR POR CABLE USB DIRECTO (AOA)", "CONNECT VIA DIRECT USB CABLE (AOA)"));
             if (aoaConn) {
-                connTitleText.setText("Conectado por USB directo a la Wii U");
-                connSubText.setText("Canal directo activo (sin Depuraci\u00f3n USB). En Wii U pulsa [Y] o [A] para instalar.");
+                connTitleText.setText(tr("Conectado por USB directo a la Wii U", "Connected via Direct USB to Wii U"));
+                connSubText.setText(tr("Canal directo activo (sin Depuraci\u00f3n USB). En Wii U pulsa [Y] o [A] para instalar.",
+                        "Direct channel active (no USB Debugging). On Wii U press [Y] or [A] to install."));
                 headerPillLayout.setBackground(roundedShape(COL_GREEN, dp(14), 0, 0));
                 headerPillDot.setBackground(circleShape(Color.parseColor("#B4FFD2")));
-                headerPillText.setText("Cable Listo");
+                headerPillText.setText(tr("Cable Listo", "USB Ready"));
             } else if (usbDataConnected) {
-                connTitleText.setText("Cable USB detectado  \u2022  Pulsa [Y] en Wii U");
+                connTitleText.setText(tr("Cable USB detectado  \u2022  Pulsa [Y] en Wii U", "USB Cable detected  \u2022  Press [Y] on Wii U"));
                 connSubText.setText(aoaStatusMsg.isEmpty()
-                        ? "En tu Wii U elige 'Modo USB', pulsa [Y] y toca Aceptar si sale un aviso USB."
+                        ? tr("En tu Wii U elige 'Modo USB', pulsa [Y] y toca Aceptar si sale un aviso USB.",
+                             "On your Wii U select 'USB Mode', press [Y] and tap OK on the USB prompt.")
                         : aoaStatusMsg);
                 headerPillLayout.setBackground(roundedShape(COL_AMBER_BG, dp(14), dp(1), COL_AMBER_BD));
                 headerPillDot.setBackground(circleShape(COL_AMBER_TX));
-                headerPillText.setText("Esperando Wii U");
+                headerPillText.setText(tr("Esperando Wii U", "Waiting Wii U"));
             } else {
-                connTitleText.setText("Conecta Android al USB frontal de la Wii U");
-                connSubText.setText("No necesitas activar Depuraci\u00f3n USB. Solo conecta el cable y pulsa [Y] en Wii U.");
+                connTitleText.setText(tr("Conecta Android al USB frontal de la Wii U", "Connect Android to Wii U front USB"));
+                connSubText.setText(tr("No necesitas activar Depuraci\u00f3n USB. Solo conecta el cable y pulsa [Y] en Wii U.",
+                        "No USB Debugging needed. Just plug in the cable and press [Y] on Wii U."));
                 headerPillLayout.setBackground(roundedShape(COL_PILL_OFF, dp(14), 0, 0));
                 headerPillDot.setBackground(circleShape(COL_MUTED));
-                headerPillText.setText("Sin Conexi\u00f3n");
+                headerPillText.setText(tr("Sin Conexi\u00f3n", "Offline"));
             }
         } else {
-            connTagText.setText("ENVIAR JUEGOS POR WI-FI A LA WII U");
+            connTagText.setText(tr("ENVIAR JUEGOS POR WI-FI A LA WII U", "SEND GAMES OVER WI-FI TO WII U"));
             if (netRunning) {
                 int clients = server.getActiveClientCount();
-                connTitleText.setText("Compartiendo por Wi-Fi  \u2022  " + ip);
-                connSubText.setText("Consolas Wii U conectadas: " + clients + "  \u2022  Enviado: " +
+                connTitleText.setText(tr("Compartiendo por Wi-Fi  \u2022  ", "Sharing via Wi-Fi  \u2022  ") + ip);
+                connSubText.setText(tr("Consolas Wii U conectadas: ", "Connected Wii U consoles: ") + clients +
+                        tr("  \u2022  Enviado: ", "  \u2022  Sent: ") +
                         NfsaTransferServer.formatBytes(server.getBytesSentTotal()));
                 headerPillLayout.setBackground(roundedShape(COL_GREEN, dp(14), 0, 0));
                 headerPillDot.setBackground(circleShape(Color.parseColor("#B4FFD2")));
-                headerPillText.setText("En L\u00ednea");
+                headerPillText.setText(tr("En L\u00ednea", "Online"));
             } else {
-                connTitleText.setText("Listo para compartir  \u2022  Wi-Fi: " + ip);
-                connSubText.setText("Pulsa 'Compartir Juegos por Red' y en tu Wii U elige 'Modo Red'");
+                connTitleText.setText(tr("Listo para compartir  \u2022  Wi-Fi: ", "Ready to share  \u2022  Wi-Fi: ") + ip);
+                connSubText.setText(tr("Pulsa 'Compartir Juegos por Red' y en tu Wii U elige 'Modo Red'",
+                        "Tap 'Share Games over Wi-Fi' and select 'Net Mode' on your Wii U"));
                 headerPillLayout.setBackground(roundedShape(COL_PILL_OFF, dp(14), 0, 0));
                 headerPillDot.setBackground(circleShape(COL_MUTED));
-                headerPillText.setText("En Espera");
+                headerPillText.setText(tr("En Espera", "Standby"));
             }
         }
     }
@@ -1057,27 +1145,37 @@ public class MainActivity extends Activity {
             }
         }
 
-        String modeLabel = isUsbMtpTab ? "Sincronizaci\u00f3n USB autom\u00e1tica" : "Modo Red Wi-Fi";
-        bottomSummaryTitle.setText(markedCount + (markedCount == 1 ? " juego seleccionado (" : " juegos seleccionados (") +
+        String modeLabel = isUsbMtpTab
+                ? tr("Sincronizaci\u00f3n USB autom\u00e1tica", "Auto USB Sync")
+                : tr("Modo Red Wi-Fi", "Wi-Fi Network Mode");
+        String selWord = (markedCount == 1)
+                ? tr(" juego seleccionado (", " game selected (")
+                : tr(" juegos seleccionados (", " games selected (");
+        bottomSummaryTitle.setText(markedCount + selWord +
                 NfsaTransferServer.formatBytes(markedBytes) + ")  \u2022  " + modeLabel);
 
         if (isUsbMtpTab) {
             boolean aoaConn = (aoaServer != null && aoaServer.isConnected());
-            btnPrimaryAction.setText(aoaConn ? "Conexi\u00f3n USB Directa Activa" : "Conectar USB Directo");
+            btnPrimaryAction.setText(aoaConn
+                    ? tr("Conexi\u00f3n USB Directa Activa", "Direct USB Connection Active")
+                    : tr("Conectar USB Directo", "Connect Direct USB"));
             btnPrimaryAction.setBackground(roundedShape(aoaConn ? COL_GREEN : COL_CYAN, dp(10), 0, 0));
             btnSecondaryAction.setVisibility(View.GONE);
             bottomSummarySub.setText(aoaConn
-                    ? "Conectado y sincronizado. En Wii U pulsa [Y] para listar y [A] para instalar."
-                    : "Selecciona tus juegos arriba, conecta el cable USB y pulsa [Y] en tu Wii U.");
+                    ? tr("Conectado y sincronizado. En Wii U pulsa [Y] para listar y [A] para instalar.",
+                         "Connected & synced. On Wii U press [Y] to list and [A] to install.")
+                    : tr("Selecciona tus juegos arriba, conecta el cable USB y pulsa [Y] en tu Wii U.",
+                         "Select your games above, plug in the USB cable and press [Y] on your Wii U."));
         } else {
             boolean netRunning = (server != null && server.isRunning());
             btnPrimaryAction.setText(netRunning
-                    ? "Detener Env\u00edo por Red"
-                    : "Compartir Juegos por Red (" + markedCount + ")");
+                    ? tr("Detener Env\u00edo por Red", "Stop Network Sharing")
+                    : tr("Compartir Juegos por Red (" + markedCount + ")", "Share Games over Wi-Fi (" + markedCount + ")"));
             btnPrimaryAction.setBackground(roundedShape(netRunning ? COL_RED : COL_CYAN, dp(10), 0, 0));
             btnSecondaryAction.setVisibility(View.GONE);
             if (!netRunning) {
-                bottomSummarySub.setText("En tu Wii U elige 'Modo Red' [X] y pulsa [Y] para conectar por Wi-Fi");
+                bottomSummarySub.setText(tr("En tu Wii U elige 'Modo Red' [X] y pulsa [Y] para conectar por Wi-Fi",
+                        "On your Wii U choose 'Net Mode' [X] and press [Y] to connect over Wi-Fi"));
             }
         }
 
@@ -1413,7 +1511,7 @@ public class MainActivity extends Activity {
         tCol.addView(mTitle);
 
         TextView mVer = new TextView(this);
-        mVer.setText("Versi\u00f3n " + APP_VERSION + "  \u2022  Por El Diuca");
+        mVer.setText(tr("Versi\u00f3n " + APP_VERSION + "  \u2022  Por El Diuca", "Version " + APP_VERSION + "  \u2022  By El Diuca"));
         mVer.setTextColor(COL_CYAN_DK);
         mVer.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         mVer.setTypeface(Typeface.DEFAULT_BOLD);
@@ -1423,7 +1521,9 @@ public class MainActivity extends Activity {
 
         // Descripción breve en lenguaje simple
         TextView descTv = new TextView(this);
-        descTv.setText("Herramienta gratuita para transferir e instalar juegos de Wii U desde tu Android, PC o Memoria USB (exFAT, FAT32, NTFS y FAT) por cable USB o Wi-Fi sin pasos t\u00e9cnicos.");
+        descTv.setText(tr(
+                "Herramienta gratuita para transferir e instalar juegos de Wii U desde tu Android, PC o Memoria USB (exFAT, FAT32, NTFS y FAT) por cable USB o Wi-Fi sin pasos t\u00e9cnicos.",
+                "Free open-source tool to transfer and install Wii U games from your Android, PC, or USB Drive (exFAT, FAT32, NTFS & FAT) via USB cable or Wi-Fi with no SD card space required."));
         descTv.setTextColor(COL_TEXT);
         descTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
         LinearLayout.LayoutParams descLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -1438,7 +1538,7 @@ public class MainActivity extends Activity {
         ghBox.setBackground(roundedShape(COL_BOX_SOFT, dp(12), dp(1), COL_BORDER));
 
         TextView ghLabel = new TextView(this);
-        ghLabel.setText("PROYECTO OFICIAL EN GITHUB");
+        ghLabel.setText(tr("PROYECTO OFICIAL EN GITHUB", "OFFICIAL GITHUB PROJECT"));
         ghLabel.setTextColor(COL_MUTED);
         ghLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
         ghLabel.setTypeface(Typeface.DEFAULT_BOLD);
@@ -1455,7 +1555,7 @@ public class MainActivity extends Activity {
         ghBox.addView(ghUrlTv, urlLp);
 
         TextView btnOpenGh = new TextView(this);
-        btnOpenGh.setText("Abrir Repositorio en GitHub");
+        btnOpenGh.setText(tr("Abrir Repositorio en GitHub", "Open GitHub Repository"));
         btnOpenGh.setTextColor(Color.WHITE);
         btnOpenGh.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
         btnOpenGh.setTypeface(Typeface.DEFAULT_BOLD);
@@ -1485,10 +1585,12 @@ public class MainActivity extends Activity {
 
         final TextView updStatusTv = new TextView(this);
         if (updateAvailable) {
-            updStatusTv.setText("\u00a1Nueva versi\u00f3n v" + latestRemoteVersion + " disponible para descargar!");
+            updStatusTv.setText(tr("\u00a1Nueva versi\u00f3n v" + latestRemoteVersion + " disponible para descargar!",
+                    "New version v" + latestRemoteVersion + " available to download!"));
             updStatusTv.setTextColor(COL_AMBER_TX);
         } else {
-            updStatusTv.setText("Versi\u00f3n actual al d\u00eda (v" + APP_VERSION + ")  \u2022  Descargas directas:");
+            updStatusTv.setText(tr("Versi\u00f3n actual al d\u00eda (v" + APP_VERSION + ")  \u2022  Descargas directas:",
+                    "Up to date (v" + APP_VERSION + ")  \u2022  Direct downloads:"));
             updStatusTv.setTextColor(COL_GREEN_HI);
         }
         updStatusTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
@@ -1500,8 +1602,9 @@ public class MainActivity extends Activity {
         // Botón Actualizar / Descargar APK Android
         TextView btnDlApk = new TextView(this);
         btnDlApk.setText(updateAvailable
-                ? "Descargar e Instalar App Android (v" + latestRemoteVersion + ")"
-                : "Buscar Actualizaci\u00f3n / Reinstalar APK");
+                ? tr("Descargar e Instalar App Android (v" + latestRemoteVersion + ")",
+                     "Download & Install Android App (v" + latestRemoteVersion + ")")
+                : tr("Buscar Actualizaci\u00f3n / Reinstalar APK", "Check Updates / Reinstall APK"));
         btnDlApk.setTextColor(Color.WHITE);
         btnDlApk.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
         btnDlApk.setTypeface(Typeface.DEFAULT_BOLD);
@@ -1520,7 +1623,7 @@ public class MainActivity extends Activity {
 
         // Botón Descargar App Wii U (.wuhb)
         TextView btnDlWuhb = new TextView(this);
-        btnDlWuhb.setText("Descargar App Wii U (WiiU_Transfer.wuhb)");
+        btnDlWuhb.setText(tr("Descargar App Wii U (WiiU_Transfer.wuhb)", "Download Wii U App (WiiU_Transfer.wuhb)"));
         btnDlWuhb.setTextColor(Color.WHITE);
         btnDlWuhb.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
         btnDlWuhb.setTypeface(Typeface.DEFAULT_BOLD);
@@ -1541,7 +1644,7 @@ public class MainActivity extends Activity {
 
         // Botón Cerrar
         TextView btnClose = new TextView(this);
-        btnClose.setText("Cerrar");
+        btnClose.setText(tr("Cerrar", "Close"));
         btnClose.setTextColor(COL_TEXT);
         btnClose.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
         btnClose.setTypeface(Typeface.DEFAULT_BOLD);

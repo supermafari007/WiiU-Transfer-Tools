@@ -32,12 +32,59 @@ from transfer_server import (
 )
 from ui_assets import ensure_pc_assets, make_rounded_corners_9slice, make_rounded_rect_img
 
-APP_VERSION = "2.0.3"
+APP_VERSION = "2.0.4"
 GITHUB_REPO_URL = "https://github.com/supermafari007/WiiU-Transfer-Tools"
 VERSION_JSON_URL = "https://raw.githubusercontent.com/supermafari007/WiiU-Transfer-Tools/main/version.json"
 RAW_PC_BASE_URL = "https://raw.githubusercontent.com/supermafari007/WiiU-Transfer-Tools/main/PC"
-DEFAULT_WUHB_URL = "https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.3/WiiU_Transfer.wuhb"
-DEFAULT_PC_SETUP_URL = "https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.3/WiiU_Transfer_Tools_Setup_v2.0.3.exe"
+DEFAULT_WUHB_URL = "https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.4/WiiU_Transfer.wuhb"
+DEFAULT_PC_SETUP_URL = "https://github.com/supermafari007/WiiU-Transfer-Tools/releases/download/v2.0.4/WiiU_Transfer_Tools_Setup_v2.0.4.exe"
+
+
+def _prefs_file() -> Path:
+    base = Path(os.environ.get("APPDATA", str(Path.home()))) / "WiiU_Transfer_Tools"
+    return base / "prefs.json"
+
+
+def detect_system_lang() -> str:
+    if sys.platform.startswith("win"):
+        try:
+            lang_id = ctypes.windll.kernel32.GetUserDefaultUILanguage()
+            # Primary language 0x0A = Spanish
+            return "es" if (lang_id & 0x3FF) == 0x0A else "en"
+        except Exception:
+            pass
+    try:
+        import locale
+        loc = (locale.getlocale()[0] or "").lower()
+        if loc.startswith("es"):
+            return "es"
+        if loc:
+            return "en"
+    except Exception:
+        pass
+    return "es"
+
+
+def load_lang_pref() -> str:
+    try:
+        p = _prefs_file()
+        if p.is_file():
+            data = json.loads(p.read_text(encoding="utf-8"))
+            v = str(data.get("lang", "")).lower()
+            if v in ("es", "en"):
+                return v
+    except Exception:
+        pass
+    return detect_system_lang()
+
+
+def save_lang_pref(lang: str) -> None:
+    try:
+        p = _prefs_file()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({"lang": lang}, indent=2), encoding="utf-8")
+    except Exception:
+        pass
 
 # Habilitar nitidez HiDPI en Windows
 if sys.platform.startswith("win"):
@@ -338,7 +385,11 @@ class StatusPill(tk.Canvas):
 class WiiUTransferApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title(f"Wii U Transfer Tools v{APP_VERSION} — Programa para PC (por El Diuca)")
+        self.lang = load_lang_pref()
+        self.root.title(self._tr(
+            f"Wii U Transfer Tools v{APP_VERSION} — Programa para PC (por El Diuca)",
+            f"Wii U Transfer Tools v{APP_VERSION} — PC App (by El Diuca)",
+        ))
         self.root.geometry("1120x740")
         self.root.minsize(1020, 660)
         self.root.configure(bg=COL_BG)
@@ -382,19 +433,13 @@ class WiiUTransferApp:
 
         local_ip = get_local_ip()
         self.var_folder = tk.StringVar(value=str(self.packages_dir))
-        self.var_ip = tk.StringVar(value=f"{local_ip} (Automática)")
-        self.var_clients = tk.StringVar(value="Esperando conexión...")
-        self.var_current_game = tk.StringVar(value="Ninguno")
-        self.var_prog_detail = tk.StringVar(value="Enviado total: 0 B")
+        self.var_ip = tk.StringVar(value=f"{local_ip} ({self._tr('Automática', 'Auto')})")
+        self.var_clients = tk.StringVar(value=self._tr("Esperando conexión...", "Waiting for connection..."))
+        self.var_current_game = tk.StringVar(value=self._tr("Ninguno", "None"))
+        self.var_prog_detail = tk.StringVar(value=self._tr("Enviado total: 0 B", "Total sent: 0 B"))
         self.var_speed = tk.StringVar(value="0.00 MB/s")
-        self.var_pkg_count = tk.StringVar(value="Juegos en tu PC (0)")
-        self.var_tip = tk.StringVar(
-            value=(
-                "1. Abre Wii U Transfer Tools en tu consola\n"
-                "2. Elige arriba 'Modo Red' con el botón [X]\n"
-                "3. Pulsa [Y] para buscar y [A] para instalar"
-            )
-        )
+        self.var_pkg_count = tk.StringVar(value=self._tr("Juegos en tu PC (0)", "Games on your PC (0)"))
+        self.var_tip = tk.StringVar(value=self._tip_text())
 
         self._setup_styles()
         self._build_ui()
@@ -403,6 +448,92 @@ class WiiUTransferApp:
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.root.after(120, self._poll_ui)
         self._check_updates_async(notify_if_up_to_date=False)
+
+    def _tr(self, es: str, en: str) -> str:
+        return en if self.lang == "en" else es
+
+    def _tip_text(self) -> str:
+        return self._tr(
+            "1. Abre Wii U Transfer Tools en tu consola\n"
+            "2. Elige arriba 'Modo Red' con el botón [X]\n"
+            "3. Pulsa [Y] para buscar y [A] para instalar",
+            "1. Open Wii U Transfer Tools on your console\n"
+            "2. Switch to 'Net Mode' at the top with [X]\n"
+            "3. Press [Y] to scan and [A] to install",
+        )
+
+    def _toggle_language(self) -> None:
+        self.lang = "en" if self.lang == "es" else "es"
+        save_lang_pref(self.lang)
+        self._apply_language()
+
+    def _apply_language(self) -> None:
+        self.root.title(self._tr(
+            f"Wii U Transfer Tools v{APP_VERSION} — Programa para PC (por El Diuca)",
+            f"Wii U Transfer Tools v{APP_VERSION} — PC App (by El Diuca)",
+        ))
+        self.lbl_subtitle.configure(
+            text=self._tr(
+                f"Envía e instala juegos a tu Wii U  •  Ver. {APP_VERSION}  •  El Diuca",
+                f"Send & install games to your Wii U  •  Ver. {APP_VERSION}  •  El Diuca",
+            )
+        )
+        self.btn_lang.configure_style(
+            text="EN | es" if self.lang == "en" else "ES | en",
+            fill=COL_PILL_OFF,
+            hover="#0F354D",
+            border=COL_CYAN,
+            fg="#A8D8EC",
+        )
+        self.btn_about.configure_style(
+            text=self._tr("i  Acerca de", "i  About"),
+            fill=COL_PILL_OFF,
+            hover="#0F354D",
+            border=COL_CYAN,
+            fg="#A8D8EC",
+        )
+        ip = get_local_ip()
+        self.var_ip.set(f"{ip} ({self._tr('Automática', 'Auto')})")
+        if self.server.is_running:
+            self.btn_toggle.configure_style(
+                text=self._tr("Detener Envío", "Stop Sharing"),
+                fill=COL_RED, hover=COL_RED_HV, fg="#FFFFFF",
+            )
+            self.status_pill.set_status(
+                self._tr(f"Compartiendo • {ip}", f"Sharing • {ip}"), COL_GREEN, "#A7F3D0"
+            )
+        else:
+            self.btn_toggle.configure_style(
+                text=self._tr("Compartir Juegos", "Share Games"),
+                fill=COL_CYAN, hover=COL_CYAN_DK, fg="#FFFFFF",
+            )
+            self.status_pill.set_status(self._tr("En espera", "Standby"), COL_PILL_OFF, "#CBD5E0")
+
+        self.lbl_folder.configure(text=self._tr("Carpeta de juegos:", "Games folder:"))
+        self.btn_change_folder.configure_style(text=self._tr("Cambiar carpeta...", "Change folder..."), border=COL_BTN_BD)
+        self.btn_refresh.configure_style(text=self._tr("Actualizar", "Refresh"), border=COL_BTN_BD)
+        self.btn_open_folder.configure_style(text=self._tr("Abrir carpeta", "Open folder"), border=COL_BTN_BD)
+        self.lbl_dblclick.configure(text=self._tr("Doble clic para abrir carpeta del juego", "Double-click to open game folder"))
+        self.tree.heading("name", text=self._tr("Nombre del Juego", "Game Name"), anchor="w")
+        self.tree.heading("size", text=self._tr("Tamaño", "Size"), anchor="e")
+        self.tree.heading("status", text=self._tr("Estado", "Status"), anchor="center")
+        self.lbl_conn_title.configure(text=self._tr("Conexión con tu Wii U", "Wii U Connection"))
+        self.lbl_stat_wiiu.configure(text=self._tr("Consola Wii U:", "Wii U Console:"))
+        self.lbl_stat_sending.configure(text=self._tr("Enviando ahora:", "Sending now:"))
+        self.lbl_stat_speed.configure(text=self._tr("Velocidad:", "Speed:"))
+        self.lbl_stat_ip.configure(text=self._tr("Red de este PC:", "This PC Network:"))
+        self.lbl_tip_title.configure(text=self._tr("¿Cómo instalar en tu Wii U?", "How to install on your Wii U?"))
+        self.var_tip.set(self._tip_text())
+        self.lbl_log_title.configure(text=self._tr("Estado y mensajes recientes", "Status & recent logs"))
+        self.btn_banner_upd.configure_style(text=self._tr("Actualizar ahora", "Update now"), fill=COL_AMBER_BD, hover="#D97706", border=None, fg="#111827")
+        if self._update_available:
+            self.lbl_update_banner.configure(
+                text=self._tr(
+                    f"¡Nueva versión v{self._remote_version} disponible en GitHub! ({self._remote_notes or 'Mejoras disponibles'})",
+                    f"New version v{self._remote_version} available on GitHub! ({self._remote_notes or 'Improvements available'})",
+                )
+            )
+        self._refresh_packages()
 
     def _setup_styles(self) -> None:
         style = ttk.Style()
@@ -470,20 +601,25 @@ class WiiUTransferApp:
             fg="#FFFFFF",
             font=("Segoe UI", 17, "bold"),
         ).pack(anchor="w")
-        tk.Label(
+        self.lbl_subtitle = tk.Label(
             title_box,
-            text=f"Envía e instala juegos a tu Wii U  •  Ver. {APP_VERSION}  •  El Diuca",
+            text=self._tr(
+                f"Envía e instala juegos a tu Wii U  •  Ver. {APP_VERSION}  •  El Diuca",
+                f"Send & install games to your Wii U  •  Ver. {APP_VERSION}  •  El Diuca",
+            ),
             bg=COL_HEADER,
             fg="#A8D8EC",
             font=("Segoe UI", 9),
-        ).pack(anchor="w", pady=(2, 0))
+        )
+        self.lbl_subtitle.pack(anchor="w", pady=(2, 0))
 
         self.status_pill = StatusPill(header, width=190, height=34)
+        self.status_pill.set_status(self._tr("En espera", "Standby"), COL_PILL_OFF, "#8EA3B8")
         self.status_pill.pack(side="right", padx=(8, 20), pady=18)
 
         self.btn_about = RoundedButton(
             header,
-            text="i  Acerca de",
+            text=self._tr("i  Acerca de", "i  About"),
             command=self._open_about_dialog,
             width=124,
             height=34,
@@ -495,7 +631,23 @@ class WiiUTransferApp:
             fg="#A8D8EC",
             font=("Segoe UI", 9, "bold"),
         )
-        self.btn_about.pack(side="right", padx=(8, 4), pady=18)
+        self.btn_about.pack(side="right", padx=(6, 4), pady=18)
+
+        self.btn_lang = RoundedButton(
+            header,
+            text="EN | es" if self.lang == "en" else "ES | en",
+            command=self._toggle_language,
+            width=82,
+            height=34,
+            radius=17,
+            bg_outer=COL_HEADER,
+            fill=COL_PILL_OFF,
+            hover="#0F354D",
+            border=COL_CYAN,
+            fg="#A8D8EC",
+            font=("Segoe UI", 9, "bold"),
+        )
+        self.btn_lang.pack(side="right", padx=(8, 2), pady=18)
 
         tk.Frame(self.root, bg=COL_CYAN, height=2).pack(fill="x", side="top")
 
@@ -508,15 +660,15 @@ class WiiUTransferApp:
         )
         self.lbl_update_banner = tk.Label(
             self.update_banner,
-            text="¡Nueva versión disponible en GitHub!",
+            text=self._tr("¡Nueva versión disponible en GitHub!", "New version available on GitHub!"),
             bg=COL_AMBER_BG,
             fg=COL_AMBER_TX,
             font=("Segoe UI", 9, "bold"),
         )
         self.lbl_update_banner.pack(side="left", padx=14, pady=6)
-        RoundedButton(
+        self.btn_banner_upd = RoundedButton(
             self.update_banner,
-            text="Actualizar ahora",
+            text=self._tr("Actualizar ahora", "Update now"),
             command=self._open_about_dialog,
             width=130,
             height=26,
@@ -527,7 +679,8 @@ class WiiUTransferApp:
             border=None,
             fg="#111827",
             font=("Segoe UI", 9, "bold"),
-        ).pack(side="right", padx=12, pady=5)
+        )
+        self.btn_banner_upd.pack(side="right", padx=12, pady=5)
 
         # Contenedor principal
         main = tk.Frame(self.root, bg=COL_BG)
@@ -539,13 +692,14 @@ class WiiUTransferApp:
         ctrl_card.pack_propagate(False)
 
         ctrl_inner = ctrl_card.inner
-        tk.Label(
+        self.lbl_folder = tk.Label(
             ctrl_inner,
-            text="Carpeta de juegos:",
+            text=self._tr("Carpeta de juegos:", "Games folder:"),
             bg=COL_CARD,
             fg=COL_TEXT,
             font=("Segoe UI", 9, "bold"),
-        ).pack(side="left", padx=(4, 8))
+        )
+        self.lbl_folder.pack(side="left", padx=(4, 8))
 
         folder_entry = tk.Entry(
             ctrl_inner,
@@ -560,19 +714,22 @@ class WiiUTransferApp:
         )
         folder_entry.pack(side="left", fill="x", expand=True, ipady=6, padx=(0, 8))
 
-        RoundedButton(
-            ctrl_inner, "Cambiar carpeta...", self._choose_folder, width=136, height=34
-        ).pack(side="left", padx=3)
-        RoundedButton(
-            ctrl_inner, "Actualizar", self._refresh_packages, width=88, height=34
-        ).pack(side="left", padx=3)
-        RoundedButton(
-            ctrl_inner, "Abrir carpeta", self._open_root_folder, width=108, height=34
-        ).pack(side="left", padx=(3, 8))
+        self.btn_change_folder = RoundedButton(
+            ctrl_inner, self._tr("Cambiar carpeta...", "Change folder..."), self._choose_folder, width=136, height=34
+        )
+        self.btn_change_folder.pack(side="left", padx=3)
+        self.btn_refresh = RoundedButton(
+            ctrl_inner, self._tr("Actualizar", "Refresh"), self._refresh_packages, width=88, height=34
+        )
+        self.btn_refresh.pack(side="left", padx=3)
+        self.btn_open_folder = RoundedButton(
+            ctrl_inner, self._tr("Abrir carpeta", "Open folder"), self._open_root_folder, width=108, height=34
+        )
+        self.btn_open_folder.pack(side="left", padx=(3, 8))
 
         self.btn_toggle = RoundedButton(
             ctrl_inner,
-            text="Compartir Juegos",
+            text=self._tr("Compartir Juegos", "Share Games"),
             command=self.toggle_server,
             width=162,
             height=34,
@@ -605,13 +762,14 @@ class WiiUTransferApp:
             fg=COL_TEXT,
             font=("Segoe UI", 12, "bold"),
         ).pack(side="left")
-        tk.Label(
+        self.lbl_dblclick = tk.Label(
             left_hdr,
-            text="Doble clic para abrir carpeta del juego",
+            text=self._tr("Doble clic para abrir carpeta del juego", "Double-click to open game folder"),
             bg=COL_CARD,
             fg=COL_MUTED,
             font=("Segoe UI", 8),
-        ).pack(side="right", pady=3)
+        )
+        self.lbl_dblclick.pack(side="right", pady=3)
 
         tree_wrap = tk.Frame(left_card.inner, bg=COL_CARD, highlightbackground=COL_BORDER, highlightthickness=1)
         tree_wrap.pack(fill="both", expand=True)
@@ -624,9 +782,9 @@ class WiiUTransferApp:
             style="Transfer.Treeview",
             selectmode="browse",
         )
-        self.tree.heading("name", text="Nombre del Juego", anchor="w")
-        self.tree.heading("size", text="Tamaño", anchor="e")
-        self.tree.heading("status", text="Estado", anchor="center")
+        self.tree.heading("name", text=self._tr("Nombre del Juego", "Game Name"), anchor="w")
+        self.tree.heading("size", text=self._tr("Tamaño", "Size"), anchor="e")
+        self.tree.heading("status", text=self._tr("Estado", "Status"), anchor="center")
 
         self.tree.column("name", width=310, minwidth=180, stretch=True, anchor="w")
         self.tree.column("size", width=110, minwidth=90, stretch=False, anchor="e")
@@ -644,19 +802,20 @@ class WiiUTransferApp:
         right_card = RoundedCard(body, bg_outer=COL_BG, fill=COL_CARD, radius=12, pad=14)
         right_card.grid(row=0, column=1, sticky="nsew")
 
-        tk.Label(
+        self.lbl_conn_title = tk.Label(
             right_card.inner,
-            text="Conexión con tu Wii U",
+            text=self._tr("Conexión con tu Wii U", "Wii U Connection"),
             bg=COL_CARD,
             fg=COL_TEXT,
             font=("Segoe UI", 12, "bold"),
-        ).pack(anchor="w", pady=(0, 6))
+        )
+        self.lbl_conn_title.pack(anchor="w", pady=(0, 6))
 
         stats_box = tk.Frame(right_card.inner, bg=COL_CARD)
         stats_box.pack(fill="x")
 
-        self._add_stat_row(stats_box, "Consola Wii U:", self.var_clients, COL_GREEN_HI)
-        self._add_stat_row(stats_box, "Enviando ahora:", self.var_current_game, COL_CYAN_HI)
+        self.lbl_stat_wiiu = self._add_stat_row(stats_box, self._tr("Consola Wii U:", "Wii U Console:"), self.var_clients, COL_GREEN_HI)
+        self.lbl_stat_sending = self._add_stat_row(stats_box, self._tr("Enviando ahora:", "Sending now:"), self.var_current_game, COL_CYAN_HI)
 
         # Barra de progreso de envío en vivo
         prog_frame = tk.Frame(right_card.inner, bg=COL_CARD)
@@ -676,8 +835,8 @@ class WiiUTransferApp:
 
         stats_box2 = tk.Frame(right_card.inner, bg=COL_CARD)
         stats_box2.pack(fill="x")
-        self._add_stat_row(stats_box2, "Velocidad:", self.var_speed, COL_GREEN_HI)
-        self._add_stat_row(stats_box2, "Red de este PC:", self.var_ip, COL_TEXT)
+        self.lbl_stat_speed = self._add_stat_row(stats_box2, self._tr("Velocidad:", "Speed:"), self.var_speed, COL_GREEN_HI)
+        self.lbl_stat_ip = self._add_stat_row(stats_box2, self._tr("Red de este PC:", "This PC Network:"), self.var_ip, COL_TEXT)
 
         tip_card = RoundedCard(
             right_card.inner,
@@ -691,13 +850,14 @@ class WiiUTransferApp:
         tip_card.pack(fill="x", pady=(10, 0))
         tip_card.pack_propagate(False)
 
-        tk.Label(
+        self.lbl_tip_title = tk.Label(
             tip_card.inner,
-            text="¿Cómo instalar en tu Wii U?",
+            text=self._tr("¿Cómo instalar en tu Wii U?", "How to install on your Wii U?"),
             bg=COL_TIP_BG,
             fg=COL_CYAN_HI,
             font=("Segoe UI", 9, "bold"),
-        ).pack(anchor="w", pady=(0, 3))
+        )
+        self.lbl_tip_title.pack(anchor="w", pady=(0, 3))
         tk.Label(
             tip_card.inner,
             textvariable=self.var_tip,
@@ -712,13 +872,14 @@ class WiiUTransferApp:
         log_card.pack(fill="x")
         log_card.pack_propagate(False)
 
-        tk.Label(
+        self.lbl_log_title = tk.Label(
             log_card.inner,
-            text="Estado y mensajes recientes",
+            text=self._tr("Estado y mensajes recientes", "Status & recent logs"),
             bg=COL_CARD,
             fg=COL_TEXT,
             font=("Segoe UI", 11, "bold"),
-        ).pack(anchor="w", pady=(0, 6))
+        )
+        self.lbl_log_title.pack(anchor="w", pady=(0, 6))
 
         log_box = RoundedCard(
             log_card.inner,
@@ -755,20 +916,25 @@ class WiiUTransferApp:
 
         self._enqueue_log(
             "INFO",
-            f"Wii U Transfer Tools v{APP_VERSION} listo. Pon tus juegos en la carpeta y pulsa 'Compartir Juegos'.",
+            self._tr(
+                f"Wii U Transfer Tools v{APP_VERSION} listo. Pon tus juegos en la carpeta y pulsa 'Compartir Juegos'.",
+                f"Wii U Transfer Tools v{APP_VERSION} ready. Place your games in the folder and click 'Share Games'.",
+            ),
         )
 
-    def _add_stat_row(self, parent, label: str, var: tk.StringVar, val_color: str) -> None:
+    def _add_stat_row(self, parent, label: str, var: tk.StringVar, val_color: str) -> tk.Label:
         row = tk.Frame(parent, bg=COL_CARD)
         row.pack(fill="x", pady=2)
-        tk.Label(row, text=label, bg=COL_CARD, fg=COL_MUTED, font=("Segoe UI", 9)).pack(side="left")
+        lbl = tk.Label(row, text=label, bg=COL_CARD, fg=COL_MUTED, font=("Segoe UI", 9))
+        lbl.pack(side="left")
         tk.Label(
             row, textvariable=var, bg=COL_CARD, fg=val_color, font=("Segoe UI", 9, "bold")
         ).pack(side="right")
+        return lbl
 
     def _choose_folder(self) -> None:
         chosen = filedialog.askdirectory(
-            title="Seleccionar carpeta de juegos de Wii U",
+            title=self._tr("Seleccionar carpeta de juegos de Wii U", "Select Wii U games folder"),
             initialdir=str(self.packages_dir),
         )
         if not chosen:
@@ -797,9 +963,13 @@ class WiiUTransferApp:
         self._pkg_meta.clear()
 
         pkgs = scan_packages(self.packages_dir)
-        self.var_pkg_count.set(f"Juegos en tu PC ({len(pkgs)})")
+        self.var_pkg_count.set(self._tr(f"Juegos en tu PC ({len(pkgs)})", f"Games on your PC ({len(pkgs)})"))
         for pkg in pkgs:
-            status = "Listo para instalar" if pkg["has_tmd"] else "Carpeta de archivos"
+            status = (
+                self._tr("Listo para instalar", "Ready to install")
+                if pkg["has_tmd"]
+                else self._tr("Carpeta de archivos", "File folder")
+            )
             iid = self.tree.insert(
                 "",
                 "end",
@@ -817,20 +987,24 @@ class WiiUTransferApp:
         if self.server.is_running:
             self.server.stop()
             self.btn_toggle.configure_style(
-                text="Compartir Juegos", fill=COL_CYAN, hover=COL_CYAN_DK, fg="#FFFFFF"
+                text=self._tr("Compartir Juegos", "Share Games"),
+                fill=COL_CYAN, hover=COL_CYAN_DK, fg="#FFFFFF",
             )
-            self.status_pill.set_status("En espera", COL_PILL_OFF, "#CBD5E0")
+            self.status_pill.set_status(self._tr("En espera", "Standby"), COL_PILL_OFF, "#CBD5E0")
         else:
             try:
                 self.server.start()
                 ip = get_local_ip()
-                self.var_ip.set(f"{ip} (Automática)")
+                self.var_ip.set(f"{ip} ({self._tr('Automática', 'Auto')})")
                 self.btn_toggle.configure_style(
-                    text="Detener Envío", fill=COL_RED, hover=COL_RED_HV, fg="#FFFFFF"
+                    text=self._tr("Detener Envío", "Stop Sharing"),
+                    fill=COL_RED, hover=COL_RED_HV, fg="#FFFFFF",
                 )
-                self.status_pill.set_status(f"Compartiendo • {ip}", COL_GREEN, "#A7F3D0")
+                self.status_pill.set_status(
+                    self._tr(f"Compartiendo • {ip}", f"Sharing • {ip}"), COL_GREEN, "#A7F3D0"
+                )
             except OSError as exc:
-                self._enqueue_log("ERR", f"No se pudo compartir en red: {exc}")
+                self._enqueue_log("ERR", self._tr(f"No se pudo compartir en red: {exc}", f"Could not share on network: {exc}"))
 
     def _poll_ui(self) -> None:
         while True:
@@ -850,9 +1024,9 @@ class WiiUTransferApp:
             stats = self.server.get_stats(reset_window=True)
             clients = stats["active_clients"]
             if clients:
-                self.var_clients.set(f"Conectada ({clients[0]})")
+                self.var_clients.set(self._tr(f"Conectada ({clients[0]})", f"Connected ({clients[0]})"))
             else:
-                self.var_clients.set("Esperando conexión...")
+                self.var_clients.set(self._tr("Esperando conexión...", "Waiting for connection..."))
 
             cur_pkg = stats.get("current_pkg") or ""
             pkg_sent = stats.get("pkg_bytes_sent", 0)
@@ -862,7 +1036,7 @@ class WiiUTransferApp:
             if cur_pkg:
                 self.var_current_game.set(cur_pkg[:26])
             else:
-                self.var_current_game.set("Ninguno")
+                self.var_current_game.set(self._tr("Ninguno", "None"))
 
             cw = max(1, self.prog_canvas.winfo_width())
             if cur_pkg and pkg_total > 0:
@@ -870,24 +1044,34 @@ class WiiUTransferApp:
                 pct = int(ratio * 100)
                 self.prog_canvas.coords(self._prog_rect, 0, 0, int(cw * ratio), 12)
                 self.var_prog_detail.set(
-                    f"Enviado: {format_bytes(pkg_sent)} de {format_bytes(pkg_total)} ({pct}%)"
+                    self._tr(
+                        f"Enviado: {format_bytes(pkg_sent)} de {format_bytes(pkg_total)} ({pct}%)",
+                        f"Sent: {format_bytes(pkg_sent)} of {format_bytes(pkg_total)} ({pct}%)",
+                    )
                 )
             else:
                 self.prog_canvas.coords(self._prog_rect, 0, 0, 0, 12)
                 self.var_prog_detail.set(
-                    f"Enviado total: {format_bytes(stats['bytes_sent_total'])}"
+                    self._tr(
+                        f"Enviado total: {format_bytes(stats['bytes_sent_total'])}",
+                        f"Total sent: {format_bytes(stats['bytes_sent_total'])}",
+                    )
                 )
 
             # Actualizar columna Estado en la tabla de juegos
             for name, iid in self._pkg_iids.items():
                 meta = self._pkg_meta.get(name, {})
                 if name in completed:
-                    new_st = "Instalado en Wii U"
+                    new_st = self._tr("Instalado en Wii U", "Installed on Wii U")
                 elif name == cur_pkg and pkg_total > 0:
                     pct = min(99, int((pkg_sent / float(pkg_total)) * 100))
-                    new_st = f"Enviando a Wii U ({pct}%)"
+                    new_st = self._tr(f"Enviando a Wii U ({pct}%)", f"Sending to Wii U ({pct}%)")
                 else:
-                    new_st = "Listo para instalar" if meta.get("has_tmd", True) else "Carpeta de archivos"
+                    new_st = (
+                        self._tr("Listo para instalar", "Ready to install")
+                        if meta.get("has_tmd", True)
+                        else self._tr("Carpeta de archivos", "File folder")
+                    )
                 cur_vals = self.tree.item(iid, "values")
                 if len(cur_vals) == 3 and cur_vals[2] != new_st:
                     self.tree.item(iid, values=(cur_vals[0], cur_vals[1], new_st))
@@ -953,7 +1137,7 @@ class WiiUTransferApp:
 
     def _open_about_dialog(self) -> None:
         dlg = tk.Toplevel(self.root)
-        dlg.title("Acerca de Wii U Transfer Tools")
+        dlg.title(self._tr("Acerca de Wii U Transfer Tools", "About Wii U Transfer Tools"))
         dlg.geometry("700x520")
         dlg.minsize(680, 500)
         dlg.resizable(False, False)
@@ -974,14 +1158,17 @@ class WiiUTransferApp:
         h_txt.pack(side="left", pady=12)
         tk.Label(
             h_txt,
-            text="Acerca de Wii U Transfer Tools",
+            text=self._tr("Acerca de Wii U Transfer Tools", "About Wii U Transfer Tools"),
             bg=COL_HEADER,
             fg="#FFFFFF",
             font=("Segoe UI", 14, "bold"),
         ).pack(anchor="w")
         tk.Label(
             h_txt,
-            text=f"Versión {APP_VERSION}  •  Desarrollado por El Diuca",
+            text=self._tr(
+                f"Versión {APP_VERSION}  •  Desarrollado por El Diuca",
+                f"Version {APP_VERSION}  •  Developed by El Diuca",
+            ),
             bg=COL_HEADER,
             fg="#A8D8EC",
             font=("Segoe UI", 9, "bold"),
@@ -997,10 +1184,13 @@ class WiiUTransferApp:
         desc_card.pack_propagate(False)
         tk.Label(
             desc_card.inner,
-            text=(
+            text=self._tr(
                 "Herramienta gratuita de código abierto para enviar e instalar juegos de Wii U "
-                "directamente desde tu PC, Celular Android o Memoria USB (exFAT, FAT32, NTFS y FAT) "
-                "por Red Wi-Fi, adaptador LAN USB o cable USB, sin pasos técnicos."
+                "directamente desde tu PC, Android o Memoria USB (exFAT, FAT32, NTFS y FAT) "
+                "por Red Wi-Fi, adaptador LAN USB o cable USB, sin pasos técnicos.",
+                "Free open-source tool to transfer and install Wii U games directly from your PC, "
+                "Android device or USB Drive (exFAT, FAT32, NTFS & FAT) via Wi-Fi, USB LAN adapter "
+                "or direct USB cable, with no SD card space required.",
             ),
             justify="left",
             anchor="w",
@@ -1016,7 +1206,7 @@ class WiiUTransferApp:
         gh_card.pack_propagate(False)
         RoundedButton(
             gh_card.inner,
-            text="Abrir en GitHub",
+            text=self._tr("Abrir en GitHub", "Open on GitHub"),
             command=lambda: webbrowser.open(GITHUB_REPO_URL),
             width=148,
             height=34,
@@ -1032,7 +1222,7 @@ class WiiUTransferApp:
         gh_left.pack(side="left", fill="x", expand=True)
         tk.Label(
             gh_left,
-            text="PROYECTO OFICIAL EN GITHUB",
+            text=self._tr("PROYECTO OFICIAL EN GITHUB", "OFFICIAL GITHUB PROJECT"),
             bg=COL_CARD,
             fg=COL_MUTED,
             font=("Segoe UI", 8, "bold"),
@@ -1060,9 +1250,15 @@ class WiiUTransferApp:
 
         var_upd_status = tk.StringVar(
             value=(
-                f"¡Nueva versión v{self._remote_version} disponible en GitHub!"
+                self._tr(
+                    f"¡Nueva versión v{self._remote_version} disponible en GitHub!",
+                    f"New version v{self._remote_version} available on GitHub!",
+                )
                 if self._update_available
-                else f"Programa al día (Ver. {APP_VERSION})  •  Actualizador conectado a GitHub"
+                else self._tr(
+                    f"Programa al día (Ver. {APP_VERSION})  •  Actualizador conectado a GitHub",
+                    f"Up to date (Ver. {APP_VERSION})  •  Updater connected to GitHub",
+                )
             )
         )
         lbl_upd = tk.Label(
@@ -1079,7 +1275,10 @@ class WiiUTransferApp:
 
         tk.Label(
             upd_card.inner,
-            text="Puedes actualizar este programa de PC o descargar la última App para tu consola Wii U (.wuhb):",
+            text=self._tr(
+                "Puedes actualizar este programa de PC o descargar la última App para tu consola Wii U (.wuhb):",
+                "You can update this PC app or download the latest Wii U console app (.wuhb):",
+            ),
             justify="left",
             anchor="w",
             wraplength=620,
@@ -1093,7 +1292,7 @@ class WiiUTransferApp:
 
         RoundedButton(
             btn_row,
-            text="Actualizar Programa PC",
+            text=self._tr("Actualizar Programa PC", "Update PC App"),
             command=lambda: self._self_update_pc_from_github(var_upd_status, lbl_upd),
             width=192,
             height=36,
@@ -1108,7 +1307,7 @@ class WiiUTransferApp:
 
         RoundedButton(
             btn_row,
-            text="Descargar App Wii U (.wuhb)",
+            text=self._tr("Descargar App Wii U (.wuhb)", "Download Wii U App (.wuhb)"),
             command=lambda: self._download_wuhb_from_github(var_upd_status, lbl_upd),
             width=228,
             height=36,
@@ -1123,7 +1322,7 @@ class WiiUTransferApp:
 
         RoundedButton(
             btn_row,
-            text="Comprobar",
+            text=self._tr("Comprobar", "Check"),
             command=lambda: self._check_updates_async(notify_if_up_to_date=True),
             width=116,
             height=36,
@@ -1138,7 +1337,7 @@ class WiiUTransferApp:
 
         RoundedButton(
             body,
-            text="Cerrar ventana",
+            text=self._tr("Cerrar ventana", "Close"),
             command=dlg.destroy,
             width=144,
             height=36,

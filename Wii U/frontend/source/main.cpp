@@ -46,6 +46,7 @@
 
 #include "../../protocol/netfsa_protocol.h"
 #include "audio_player.hpp"
+#include "lang.hpp"
 #include "ui_canvas.hpp"
 #include "usb_fat_reader.hpp"
 #include "usb_aoa_reader.hpp"
@@ -62,7 +63,7 @@ constexpr uint32_t SOMEMOPT_BUF_SIZE = 0x200000;        // 2 MB para pool TCP ns
 constexpr uint32_t SOMEMOPT_STACK_SZ = 16 * 1024;
 constexpr uint32_t WRITER_STACK_SIZE = 32 * 1024;
 constexpr uint32_t UI_REFRESH_MS     = 450;
-constexpr const char* APP_VERSION_STR = "v2.0.2";
+constexpr const char* APP_VERSION_STR = "v2.0.4";
 
 wutaudio::AudioManager* gAudioMgr = nullptr;
 
@@ -151,7 +152,7 @@ enum class PkgSource {
 };
 
 struct AppState {
-    PkgSource source = PkgSource::NetworkPc;
+    PkgSource source = PkgSource::UsbFat;
 
     bool connected = false;
     std::string serverIp;
@@ -302,7 +303,8 @@ enum AppAction : uint32_t {
     ACT_X        = 1u << 10,
     ACT_MARK     = 1u << 11,
     ACT_MARK_ALL = 1u << 12,
-    ACT_MUTE     = 1u << 13
+    ACT_MUTE     = 1u << 13,
+    ACT_LANG     = 1u << 14
 };
 
 struct InputSnapshot {
@@ -410,6 +412,7 @@ private:
         if (bits & (VPAD_BUTTON_MINUS | VPAD_BUTTON_ZL))               act |= ACT_MARK;
         if (bits & VPAD_BUTTON_ZR)                                     act |= ACT_MARK_ALL;
         if (bits & VPAD_BUTTON_STICK_R)                                act |= ACT_MUTE;
+        if (bits & VPAD_BUTTON_STICK_L)                                act |= ACT_LANG;
         if (bits & VPAD_BUTTON_PLUS)                                   act |= ACT_EXIT;
         return act;
     }
@@ -429,6 +432,7 @@ private:
         if (bits & (WPAD_PRO_BUTTON_MINUS | WPAD_PRO_BUTTON_ZL))               act |= ACT_MARK;
         if (bits & WPAD_PRO_BUTTON_ZR)                                         act |= ACT_MARK_ALL;
         if (bits & WPAD_PRO_BUTTON_STICK_R)                                    act |= ACT_MUTE;
+        if (bits & WPAD_PRO_BUTTON_STICK_L)                                    act |= ACT_LANG;
         if (bits & WPAD_PRO_BUTTON_PLUS)                                       act |= ACT_EXIT;
         return act;
     }
@@ -1039,7 +1043,8 @@ bool ScanAndroidMtp(AppState& st) {
         st.statusIsError = true;
         st.statusIsSuccess = false;
         st.statusLine = diag;
-        st.subStatusLine = "Conecta tu Memoria USB o Android al puerto USB frontal.";
+        st.subStatusLine = wutlang::Tr("Conecta tu Memoria USB o Android al puerto USB frontal.",
+                                       "Connect your USB Drive or Android to the front USB port.");
         return false;
     }
 
@@ -1052,10 +1057,12 @@ bool ScanAndroidMtp(AppState& st) {
 
     st.statusIsError = false;
     st.statusIsSuccess = true;
-    st.statusLine = "Android conectado (" + devName + ")";
+    st.statusLine = std::string(wutlang::Tr("Android conectado (", "Android connected (")) + devName + ")";
     st.subStatusLine = st.mtpPkgs.empty()
-        ? "No se encontraron juegos en /WiiU_Transfer o /Download."
-        : (std::to_string(st.mtpPkgs.size()) + " juego(s) listo(s) para instalar.");
+        ? wutlang::Tr("No se encontraron juegos en /WiiU_Transfer o /Download.",
+                      "No games found in /WiiU_Transfer or /Download.")
+        : (std::to_string(st.mtpPkgs.size()) +
+           wutlang::Tr(" juego(s) listo(s) para instalar.", " game(s) ready to install."));
     return true;
 }
 
@@ -1068,7 +1075,7 @@ bool ScanUsbPendrive(AppState& st) {
     if (!st.mochaUnlocked || st.fsaRawHandle < 0) {
         st.statusIsError = true;
         st.statusIsSuccess = false;
-        st.statusLine = "No se pudo acceder al puerto USB.";
+        st.statusLine = wutlang::Tr("No se pudo acceder al puerto USB.", "Could not access USB port.");
         st.subStatusLine.clear();
         return false;
     }
@@ -1079,7 +1086,8 @@ bool ScanUsbPendrive(AppState& st) {
         st.statusIsError = true;
         st.statusIsSuccess = false;
         st.statusLine = diag;
-        st.subStatusLine = "Conecta tu Memoria USB o Android al puerto USB frontal.";
+        st.subStatusLine = wutlang::Tr("Conecta tu Memoria USB o Android al puerto USB frontal.",
+                                       "Connect your USB Drive or Android to the front USB port.");
         return false;
     }
 
@@ -1091,14 +1099,16 @@ bool ScanUsbPendrive(AppState& st) {
 
     st.statusIsError = false;
     st.statusIsSuccess = true;
-    st.statusLine = std::string("Memoria USB detectada (") + st.usbFat.FsName() + ")";
+    st.statusLine = std::string(wutlang::Tr("Memoria USB detectada (", "USB Drive detected (")) + st.usbFat.FsName() + ")";
     st.subStatusLine = st.usbPkgs.empty()
-        ? "No se encontraron carpetas de juegos en la Memoria USB."
-        : (std::to_string(st.usbPkgs.size()) + " juego(s) listo(s) para instalar.");
+        ? wutlang::Tr("No se encontraron carpetas de juegos en la Memoria USB.",
+                      "No game folders found on USB Drive.")
+        : (std::to_string(st.usbPkgs.size()) +
+           wutlang::Tr(" juego(s) listo(s) para instalar.", " game(s) ready to install."));
     return true;
 }
 
-// Autodetección unificada para "Modo USB" (Memoria USB exFAT/FAT32/NTFS/FAT o Android MTP)
+// Autodetección unificada para "Modo USB" (Memoria USB exFAT/FAT32/NTFS/FAT o Android AOA)
 bool ScanUnifiedUsb(AppState& st) {
     // Si el Android ya tiene una sesion AOA viva, re-escanear SIN desconectar
     if (st.mtpConnected && st.mtpDev.IsConnected()) {
@@ -1111,10 +1121,12 @@ bool ScanUnifiedUsb(AppState& st) {
             st.scrollOffset = 0;
             st.statusIsError = false;
             st.statusIsSuccess = true;
-            st.statusLine = "Android conectado (" + st.mtpDeviceName + ")";
+            st.statusLine = std::string(wutlang::Tr("Android conectado (", "Android connected (")) + st.mtpDeviceName + ")";
             st.subStatusLine = st.mtpPkgs.empty()
-                ? "Elige tu carpeta de juegos en la App Android."
-                : (std::to_string(st.mtpPkgs.size()) + " juego(s) listo(s) en Android.");
+                ? wutlang::Tr("Elige tu carpeta de juegos en la App Android.",
+                              "Select your games folder in the Android App.")
+                : (std::to_string(st.mtpPkgs.size()) +
+                   wutlang::Tr(" juego(s) listo(s) en Android.", " game(s) ready on Android."));
             return true;
         }
         // Solo desconectar si la sesion anterior realmente murio (ej. se desconecto el cable)
@@ -1147,15 +1159,17 @@ bool ScanUnifiedUsb(AppState& st) {
             st.scrollOffset = 0;
             st.statusIsError = false;
             st.statusIsSuccess = true;
-            st.statusLine = std::string("Memoria USB detectada (") + st.usbFat.FsName() + ")";
+            st.statusLine = std::string(wutlang::Tr("Memoria USB detectada (", "USB Drive detected (")) + st.usbFat.FsName() + ")";
             st.subStatusLine = st.usbPkgs.empty()
-                ? "Copia tus carpetas de juegos en la Memoria USB."
-                : (std::to_string(st.usbPkgs.size()) + " juego(s) listo(s) para instalar.");
+                ? wutlang::Tr("Copia tus carpetas de juegos en la Memoria USB.",
+                              "Copy your game folders onto the USB Drive.")
+                : (std::to_string(st.usbPkgs.size()) +
+                   wutlang::Tr(" juego(s) listo(s) para instalar.", " game(s) ready to install."));
             return true;
         }
     }
 
-    // 2. Si no hay Memoria USB, buscar Android por USB MTP
+    // 2. Si no hay Memoria USB, buscar Android por USB AOA
     std::string mtpName;
     std::string mtpDiag;
     if (st.mtpDev.ProbeAndConnect(mtpName, mtpDiag)) {
@@ -1168,20 +1182,24 @@ bool ScanUnifiedUsb(AppState& st) {
         st.scrollOffset = 0;
         st.statusIsError = false;
         st.statusIsSuccess = true;
-        st.statusLine = "Android conectado (" + mtpName + ")";
+        st.statusLine = std::string(wutlang::Tr("Android conectado (", "Android connected (")) + mtpName + ")";
         st.subStatusLine = st.mtpPkgs.empty()
-            ? "Pon tus juegos en /WiiU_Transfer o /Download de Android."
-            : (std::to_string(st.mtpPkgs.size()) + " juego(s) listo(s) en Android.");
+            ? wutlang::Tr("Pon tus juegos en /WiiU_Transfer o /Download de Android.",
+                          "Place your games in /WiiU_Transfer or /Download on Android.")
+            : (std::to_string(st.mtpPkgs.size()) +
+               wutlang::Tr(" juego(s) listo(s) en Android.", " game(s) ready on Android."));
         return true;
     }
 
     st.source = PkgSource::UsbFat;
     st.statusIsError = true;
     st.statusIsSuccess = false;
-    st.statusLine = "No se detecto Memoria USB ni Android por USB.";
+    st.statusLine = wutlang::Tr("No se detecto Memoria USB ni Android por USB.",
+                                "No USB Drive or Android device detected.");
     st.subStatusLine = !mtpDiag.empty()
         ? mtpDiag
-        : "Soporta exFAT, FAT32, NTFS, FAT y Android. Pulsa [Y].";
+        : wutlang::Tr("Soporta exFAT, FAT32, NTFS, FAT y Android. Pulsa [Y].",
+                      "Supports exFAT, FAT32, NTFS, FAT & Android. Press [Y].");
     return false;
 }
 
@@ -1437,46 +1455,59 @@ void DrawUI(wutui::UiCanvas& ui, const AppState& st) {
     ui.FillRect(0, 94, wutui::LOGICAL_W, 2, wutui::COL_CYAN);
     ui.DrawGamepadIcon(28, 10);
     ui.DrawText(146, 16, "Wii U Transfer Tools", wutui::COL_WHITE, wutui::FontId::Header);
-    ui.DrawText(146, 58, "por El Diuca  *  Ver. 2.0.3", wutui::COL_CYAN_SUB, wutui::FontId::Body, 376);
+    ui.DrawText(146, 58, wutlang::Tr("por El Diuca  *  Ver. 2.0.4", "by El Diuca  *  Ver. 2.0.4"),
+                wutui::COL_CYAN_SUB, wutui::FontId::Body, 354);
 
-    // Selector simplificado de 2 pestañas [X]: Modo USB | Modo Red (x=536..872)
-    ui.FillRoundedRect(536, 24, 336, 48, 24, wutui::COL_PILL_OFF);
-    int segX = isUsbMode ? 540 : 706;
-    ui.FillRoundedRect(segX, 28, 162, 40, 20, wutui::COL_CYAN);
-    ui.DrawTextCentered(540, 28, 162, 40, "Modo USB",
+    // Selector simplificado de 2 pestañas [X]: Modo USB | Modo Red (x=508..808)
+    ui.FillRoundedRect(508, 24, 300, 48, 24, wutui::COL_PILL_OFF);
+    int segX = isUsbMode ? 512 : 660;
+    ui.FillRoundedRect(segX, 28, 144, 40, 20, wutui::COL_CYAN);
+    ui.DrawTextCentered(512, 28, 144, 40, wutlang::Tr("Modo USB", "USB Mode"),
                         isUsbMode ? wutui::COL_WHITE : wutui::COL_CYAN_SUB, wutui::FontId::Body);
-    ui.DrawTextCentered(706, 28, 162, 40, "Modo Red",
+    ui.DrawTextCentered(660, 28, 144, 40, wutlang::Tr("Modo Red", "Net Mode"),
                         !isUsbMode ? wutui::COL_WHITE : wutui::COL_CYAN_SUB, wutui::FontId::Body);
 
-    // Botón de Música [R-Stick] o táctil (x=888..1020)
+    // Botón de Música [R-Stick] o táctil (x=818..932)
     bool musicOn = (gAudioMgr != nullptr) && !gAudioMgr->IsMuted();
-    ui.FillRoundedRect(888, 24, 132, 48, 24, musicOn ? wutui::COL_PILL_OFF : wutui::COL_RED_DARK);
-    ui.DrawRoundedOutline(888, 24, 132, 48, 24, 2, musicOn ? wutui::COL_CYAN : wutui::COL_RED);
-    ui.DrawTextCentered(888, 24, 132, 48, musicOn ? "Musica: SI" : "Musica: NO",
+    ui.FillRoundedRect(818, 24, 114, 48, 24, musicOn ? wutui::COL_PILL_OFF : wutui::COL_RED_DARK);
+    ui.DrawRoundedOutline(818, 24, 114, 48, 24, 2, musicOn ? wutui::COL_CYAN : wutui::COL_RED);
+    ui.DrawTextCentered(818, 24, 114, 48,
+                        musicOn ? wutlang::Tr("Musica: SI", "Music: ON")
+                                : wutlang::Tr("Musica: NO", "Music: OFF"),
                         wutui::COL_WHITE, wutui::FontId::Small);
 
-    // Píldora de estado derecha (x=1034..1256)
-    const int px = 1034;
-    const int pw = 222;
+    // Botón sutil de Idioma [L-Stick] o táctil (x=940..1028)
+    ui.FillRoundedRect(940, 24, 88, 48, 24, wutui::COL_PILL_OFF);
+    ui.DrawRoundedOutline(940, 24, 88, 48, 24, 2, wutui::COL_CYAN);
+    ui.DrawTextCentered(940, 24, 88, 48, wutlang::IsEnglish() ? "EN | es" : "ES | en",
+                        wutui::COL_CYAN_DK, wutui::FontId::Small);
+
+    // Píldora de estado derecha (x=1036..1256)
+    const int px = 1036;
+    const int pw = 220;
     if (isUsbMode) {
         if (st.usbFatConnected) {
             ui.FillRoundedRect(px, 24, pw, 48, 24, wutui::COL_GREEN);
-            ui.DrawTextCentered(px, 24, pw, 48, "Memoria USB Lista", wutui::COL_WHITE, wutui::FontId::Body);
+            ui.DrawTextCentered(px, 24, pw, 48, wutlang::Tr("Memoria USB Lista", "USB Drive Ready"),
+                                wutui::COL_WHITE, wutui::FontId::Body);
         } else if (st.mtpConnected) {
             ui.FillRoundedRect(px, 24, pw, 48, 24, wutui::COL_GREEN);
-            ui.DrawTextCentered(px, 24, pw, 48, "Android Conectado", wutui::COL_WHITE, wutui::FontId::Body);
+            ui.DrawTextCentered(px, 24, pw, 48, wutlang::Tr("Android Conectado", "Android Connected"),
+                                wutui::COL_WHITE, wutui::FontId::Body);
         } else {
             ui.FillRoundedRect(px, 24, pw, 48, 24, wutui::COL_PILL_OFF);
-            ui.DrawTextCentered(px, 24, pw, 48, "Sin USB [Y] Buscar", wutui::COL_WHITE, wutui::FontId::Small);
+            ui.DrawTextCentered(px, 24, pw, 48, wutlang::Tr("Sin USB [Y] Buscar", "No USB [Y] Scan"),
+                                wutui::COL_WHITE, wutui::FontId::Small);
         }
     } else {
         if (st.connected) {
-            std::string pill = "Red: " + st.serverIp;
+            std::string pill = std::string(wutlang::Tr("Red: ", "Net: ")) + st.serverIp;
             ui.FillRoundedRect(px, 24, pw, 48, 24, wutui::COL_GREEN);
             ui.DrawTextCentered(px, 24, pw, 48, pill, wutui::COL_WHITE, wutui::FontId::Small);
         } else {
             ui.FillRoundedRect(px, 24, pw, 48, 24, wutui::COL_PILL_OFF);
-            ui.DrawTextCentered(px, 24, pw, 48, "Sin Red [Y] Buscar", wutui::COL_WHITE, wutui::FontId::Small);
+            ui.DrawTextCentered(px, 24, pw, 48, wutlang::Tr("Sin Red [Y] Buscar", "No Net [Y] Scan"),
+                                wutui::COL_WHITE, wutui::FontId::Small);
         }
     }
 
@@ -1485,7 +1516,7 @@ void DrawUI(wutui::UiCanvas& ui, const AppState& st) {
     ui.DrawRoundedOutline(36, 120, 594, 530, 20, 2, wutui::COL_BORDER);
 
     char hdrBuf[64];
-    std::snprintf(hdrBuf, sizeof(hdrBuf), "Juegos encontrados (%d)", pkgCount);
+    std::snprintf(hdrBuf, sizeof(hdrBuf), wutlang::Tr("Juegos encontrados (%d)", "Games found (%d)"), pkgCount);
     ui.DrawText(60, 140, hdrBuf, wutui::COL_TEXT, wutui::FontId::Title, 345);
 
     if (pkgCount > 0) {
@@ -1493,7 +1524,8 @@ void DrawUI(wutui::UiCanvas& ui, const AppState& st) {
         ui.FillRoundedRect(414, 134, 96, 34, 10, allMarked ? wutui::COL_CYAN_LT : wutui::COL_BTN_OFF);
         ui.DrawRoundedOutline(414, 134, 96, 34, 10, allMarked ? 2 : 1,
                               allMarked ? wutui::COL_CYAN : wutui::COL_BORDER);
-        ui.DrawTextCentered(414, 134, 96, 34, allMarked ? "Limpiar" : "Todos",
+        ui.DrawTextCentered(414, 134, 96, 34,
+                            allMarked ? wutlang::Tr("Limpiar", "Clear") : wutlang::Tr("Todos", "All"),
                             allMarked ? wutui::COL_CYAN_DK : wutui::COL_TEXT, wutui::FontId::Small);
     }
 
@@ -1516,21 +1548,28 @@ void DrawUI(wutui::UiCanvas& ui, const AppState& st) {
     if (pkgCount == 0) {
         if (!isUsbMode) {
             ui.DrawText(60, 210, st.connected
-                ? "No hay juegos en la carpeta compartida."
-                : "Abre el programa en tu PC o App en tu Android", wutui::COL_MUTED, wutui::FontId::Body);
+                ? wutlang::Tr("No hay juegos en la carpeta compartida.", "No games in shared folder.")
+                : wutlang::Tr("Abre el programa en tu PC o App en tu Android", "Open the PC program or Android App"),
+                wutui::COL_MUTED, wutui::FontId::Body);
             ui.DrawText(60, 244, st.connected
-                ? "Agrega tus juegos y pulsa [Y] para actualizar."
-                : "y pulsa [Y] para buscar juegos por Red.", wutui::COL_MUTED, wutui::FontId::Body);
+                ? wutlang::Tr("Agrega tus juegos y pulsa [Y] para actualizar.", "Add your games and press [Y] to refresh.")
+                : wutlang::Tr("y pulsa [Y] para buscar juegos por Red.", "and press [Y] to scan games over Network."),
+                wutui::COL_MUTED, wutui::FontId::Body);
         } else {
             bool anyUsbConn = (st.usbFatConnected || st.mtpConnected);
             ui.DrawText(60, 210, anyUsbConn
-                ? "No se encontraron juegos disponibles."
-                : "Conecta tu Memoria USB o Android al puerto", wutui::COL_MUTED, wutui::FontId::Body);
+                ? wutlang::Tr("No se encontraron juegos disponibles.", "No available games found.")
+                : wutlang::Tr("Conecta tu Memoria USB o Android al puerto", "Connect your USB Drive or Android to the"),
+                wutui::COL_MUTED, wutui::FontId::Body);
             ui.DrawText(60, 244, anyUsbConn
-                ? "Agrega tus juegos y pulsa [Y] para actualizar."
-                : "USB frontal de la consola y pulsa [Y].", wutui::COL_MUTED, wutui::FontId::Body);
+                ? wutlang::Tr("Agrega tus juegos y pulsa [Y] para actualizar.", "Add your games and press [Y] to refresh.")
+                : wutlang::Tr("USB frontal de la consola y pulsa [Y].", "front USB port of the console and press [Y]."),
+                wutui::COL_MUTED, wutui::FontId::Body);
             if (!anyUsbConn) {
-                ui.DrawText(60, 282, "Formatos USB: exFAT, FAT32, NTFS, FAT y Android.", wutui::COL_CYAN_SUB, wutui::FontId::Small);
+                ui.DrawText(60, 282,
+                            wutlang::Tr("Formatos USB: exFAT, FAT32, NTFS, FAT y Android.",
+                                        "USB Formats: exFAT, FAT32, NTFS, FAT & Android."),
+                            wutui::COL_CYAN_SUB, wutui::FontId::Small);
             }
         }
     } else {
@@ -1562,7 +1601,7 @@ void DrawUI(wutui::UiCanvas& ui, const AppState& st) {
 
             ui.DrawText(114, cy + 16, pName, wutui::COL_TEXT, wutui::FontId::Title, 474);
             char sub[96];
-            std::snprintf(sub, sizeof(sub), "%s  *  Listo para instalar",
+            std::snprintf(sub, sizeof(sub), wutlang::Tr("%s  *  Listo para instalar", "%s  *  Ready to install"),
                           wutui::UiCanvas::FormatBytes(pBytes).c_str());
             ui.DrawText(114, cy + 54, sub, sel ? wutui::COL_CYAN_DK : wutui::COL_MUTED, wutui::FontId::Body, 474);
         }
@@ -1572,14 +1611,17 @@ void DrawUI(wutui::UiCanvas& ui, const AppState& st) {
     ui.FillRoundedRect(650, 120, 594, 530, 20, wutui::COL_CARD);
     ui.DrawRoundedOutline(650, 120, 594, 530, 20, 2, wutui::COL_BORDER);
 
-    ui.DrawTextCentered(650, 130, 594, 32, "Opciones de instalacion", wutui::COL_TEXT, wutui::FontId::Title);
+    ui.DrawTextCentered(650, 130, 594, 32, wutlang::Tr("Opciones de instalacion", "Install options"),
+                        wutui::COL_TEXT, wutui::FontId::Title);
 
     // Caja resumen centrada (y=168..268)
     ui.FillRoundedRect(678, 168, 538, 100, 14, wutui::COL_BOX_SOFT);
     ui.DrawRoundedOutline(678, 168, 538, 100, 14, 1, wutui::COL_BORDER);
     if (markedCount > 0) {
         std::string mTitle = std::to_string(markedCount) +
-                             (markedCount == 1 ? " juego seleccionado (" : " juegos seleccionados (") +
+                             (markedCount == 1
+                                 ? wutlang::Tr(" juego seleccionado (", " game selected (")
+                                 : wutlang::Tr(" juegos seleccionados (", " games selected (")) +
                              wutui::UiCanvas::FormatBytes(st.MarkedTotalBytes()) + ")";
         ui.DrawTextCentered(688, 174, 518, 28, mTitle, wutui::COL_CYAN_DK, wutui::FontId::Title);
     } else if (pkgCount > 0 && st.selectedIdx >= 0 && st.selectedIdx < pkgCount) {
@@ -1588,38 +1630,45 @@ void DrawUI(wutui::UiCanvas& ui, const AppState& st) {
         std::string sTitle = pName + " (" + wutui::UiCanvas::FormatBytes(pBytes) + ")";
         ui.DrawTextCentered(688, 174, 518, 28, sTitle, wutui::COL_CYAN_DK, wutui::FontId::Body);
     } else {
-        ui.DrawTextCentered(688, 174, 518, 28, "Ningun juego seleccionado",
+        ui.DrawTextCentered(688, 174, 518, 28, wutlang::Tr("Ningun juego seleccionado", "No game selected"),
                             wutui::COL_MUTED, wutui::FontId::Body);
     }
 
     std::string usbStr = st.mochaUnlocked
-        ? (st.usbAvailable ? wutui::UiCanvas::FormatBytes(st.usbFreeBytes) : "No conectado")
+        ? (st.usbAvailable ? wutui::UiCanvas::FormatBytes(st.usbFreeBytes) : wutlang::Tr("No conectado", "Not connected"))
         : "?";
     std::string nandStr = st.mochaUnlocked ? wutui::UiCanvas::FormatBytes(st.nandFreeBytes) : "?";
     ui.DrawTextCentered(688, 208, 518, 22,
-                        "Espacio libre  *  Disco USB: " + usbStr + "  |  Consola: " + nandStr,
+                        std::string(wutlang::Tr("Espacio libre  *  Disco USB: ", "Free space  *  USB Drive: ")) +
+                        usbStr + wutlang::Tr("  |  Consola: ", "  |  NAND: ") + nandStr,
                         wutui::COL_TEXT, wutui::FontId::Small);
 
-    std::string sdStr = "Tarjeta SD: " + wutui::UiCanvas::FormatBytes(st.sdFreeBytes) + " libres";
+    std::string sdStr = std::string(wutlang::Tr("Tarjeta SD: ", "SD Card: ")) +
+                        wutui::UiCanvas::FormatBytes(st.sdFreeBytes) +
+                        wutlang::Tr(" libres", " free");
     ui.DrawTextCentered(688, 234, 518, 22, sdStr, wutui::COL_GREEN_HI, wutui::FontId::Small);
 
     // Donde guardar (Disco USB vs Memoria Consola) (y=276..342)
-    ui.DrawText(678, 276, "Donde guardar [Izq / Der]:", wutui::COL_MUTED, wutui::FontId::Small);
+    ui.DrawText(678, 276, wutlang::Tr("Donde guardar [Izq / Der]:", "Save to [Left / Right]:"),
+                wutui::COL_MUTED, wutui::FontId::Small);
 
     ui.FillRoundedRect(678, 298, 260, 42, 21, st.targetUsb ? wutui::COL_CYAN_LT : wutui::COL_BTN_OFF);
     if (st.targetUsb) ui.DrawRoundedOutline(678, 298, 260, 42, 21, 3, wutui::COL_CYAN);
-    ui.DrawTextCentered(678, 298, 260, 42, "Disco USB",
+    ui.DrawTextCentered(678, 298, 260, 42, wutlang::Tr("Disco USB", "USB Storage"),
                         st.targetUsb ? wutui::COL_WHITE : wutui::COL_MUTED, wutui::FontId::Body);
 
     ui.FillRoundedRect(956, 298, 260, 42, 21, !st.targetUsb ? wutui::COL_CYAN_LT : wutui::COL_BTN_OFF);
     if (!st.targetUsb) ui.DrawRoundedOutline(956, 298, 260, 42, 21, 3, wutui::COL_CYAN);
-    ui.DrawTextCentered(956, 298, 260, 42, "Memoria Consola",
+    ui.DrawTextCentered(956, 298, 260, 42, wutlang::Tr("Memoria Consola", "Console NAND"),
                         !st.targetUsb ? wutui::COL_WHITE : wutui::COL_MUTED, wutui::FontId::Body);
 
     // Metodo de copia compacto en 1 linea (y=347..379)
-    ui.DrawText(678, 352, "Metodo de copia [L / R]:", wutui::COL_MUTED, wutui::FontId::Small);
+    ui.DrawText(678, 352, wutlang::Tr("Metodo de copia [L / R]:", "Copy method [L / R]:"),
+                wutui::COL_MUTED, wutui::FontId::Small);
     bool isMocha = (st.mode == TransferMode::NetFsaMocha);
-    const char* modeLabel = isMocha ? "Directo (Sin usar tarjeta SD)" : "Usando tarjeta SD temporal";
+    const char* modeLabel = isMocha
+        ? wutlang::Tr("Directo (Sin usar tarjeta SD)", "Direct (No SD card needed)")
+        : wutlang::Tr("Usando tarjeta SD temporal", "Using temporary SD card");
 
     ui.FillRoundedRect(868, 347, 348, 32, 16, isMocha ? wutui::COL_CYAN_LT : wutui::COL_CARD_ALT);
     ui.DrawRoundedOutline(868, 347, 348, 32, 16, isMocha ? 2 : 1,
@@ -1633,13 +1682,14 @@ void DrawUI(wutui::UiCanvas& ui, const AppState& st) {
                                      : (canInstall ? wutui::COL_CYAN : wutui::COL_BTN_OFF));
     std::string btnLabel;
     if (st.cancelling) {
-        btnLabel = "Cancelando...";
+        btnLabel = wutlang::Tr("Cancelando...", "Cancelling...");
     } else if (st.installing) {
-        btnLabel = "Cancelar instalacion [B]";
+        btnLabel = wutlang::Tr("Cancelar instalacion [B]", "Cancel install [B]");
     } else if (markedCount > 1) {
-        btnLabel = "Instalar " + std::to_string(markedCount) + " juegos [A]";
+        btnLabel = std::string(wutlang::Tr("Instalar ", "Install ")) + std::to_string(markedCount) +
+                   wutlang::Tr(" juegos [A]", " games [A]");
     } else {
-        btnLabel = "Instalar juego [A]";
+        btnLabel = wutlang::Tr("Instalar juego [A]", "Install game [A]");
     }
     ui.FillRoundedRect(678, 392, 538, 58, 16, btnCol);
     ui.DrawTextCentered(678, 392, 538, 58, btnLabel,
@@ -1671,42 +1721,52 @@ void DrawUI(wutui::UiCanvas& ui, const AppState& st) {
         char sp[96];
         if (st.speedMBs > 0.01) {
             if (st.queueTotal > 1) {
-                std::snprintf(sp, sizeof(sp), "Velocidad: %.2f MB/s (%d%%)  |  Juego %d de %d",
+                std::snprintf(sp, sizeof(sp),
+                              wutlang::Tr("Velocidad: %.2f MB/s (%d%%)  |  Juego %d de %d",
+                                          "Speed: %.2f MB/s (%d%%)  |  Game %d of %d"),
                               st.speedMBs, static_cast<int>(clamped * 100.0f),
                               st.queueCurrent, st.queueTotal);
             } else {
-                std::snprintf(sp, sizeof(sp), "Velocidad: %.2f MB/s (%d%%)",
+                std::snprintf(sp, sizeof(sp),
+                              wutlang::Tr("Velocidad: %.2f MB/s (%d%%)", "Speed: %.2f MB/s (%d%%)"),
                               st.speedMBs, static_cast<int>(clamped * 100.0f));
             }
         } else if (st.queueTotal > 1) {
-            std::snprintf(sp, sizeof(sp), "Progreso: %d%%  |  Juego %d de %d",
+            std::snprintf(sp, sizeof(sp),
+                          wutlang::Tr("Progreso: %d%%  |  Juego %d de %d", "Progress: %d%%  |  Game %d of %d"),
                           static_cast<int>(clamped * 100.0f), st.queueCurrent, st.queueTotal);
         } else {
-            std::snprintf(sp, sizeof(sp), "Progreso: %d%%", static_cast<int>(clamped * 100.0f));
+            std::snprintf(sp, sizeof(sp), wutlang::Tr("Progreso: %d%%", "Progress: %d%%"),
+                          static_cast<int>(clamped * 100.0f));
         }
         ui.DrawTextCentered(696, 574, 502, 32, sp, wutui::COL_CYAN_DK, wutui::FontId::Body);
     } else if (isUsbMode && st.usbFatConnected) {
         ui.FillRoundedRect(696, 566, 502, 50, 10, wutui::COL_CARD_ALT);
         ui.DrawRoundedOutline(696, 566, 502, 50, 10, 1, wutui::COL_CYAN_DK);
         ui.DrawTextCentered(696, 566, 502, 50,
-                            "Aviso: Retira la memoria USB antes de salir al Menu",
+                            wutlang::Tr("Aviso: Retira la memoria USB antes de salir al Menu",
+                                        "Notice: Unplug the USB Drive before exiting to Menu"),
                             wutui::COL_CYAN_SUB, wutui::FontId::Small);
     } else if (isUsbMode && st.mtpConnected) {
         ui.FillRoundedRect(696, 566, 502, 50, 10, wutui::COL_CARD_ALT);
         ui.DrawRoundedOutline(696, 566, 502, 50, 10, 1, wutui::COL_CYAN_DK);
         ui.DrawTextCentered(696, 566, 502, 50,
-                            "Android conectado por USB: instalacion directa",
+                            wutlang::Tr("Android conectado por USB: instalacion directa",
+                                        "Android connected via USB: direct installation"),
                             wutui::COL_CYAN_SUB, wutui::FontId::Small);
     } else {
         ui.DrawTextCentered(696, 574, 502, 32,
-                            "Formatos USB: exFAT, FAT32, NTFS, FAT y Android",
+                            wutlang::Tr("Formatos USB: exFAT, FAT32, NTFS, FAT y Android",
+                                        "USB Formats: exFAT, FAT32, NTFS, FAT & Android"),
                             wutui::COL_MUTED, wutui::FontId::Small);
     }
 
     // 4. Footer controles simples (y=668..720)
     const char* footerText = st.installing
-        ? "[B] o tocar 'Cancelar' para detener   |   [HOME] Menu Wii U"
-        : "[Arr/Abj] Elegir  [-/ZL] Marcar  [X] USB/Red  [R-Stick] Musica  [A] Instalar  [Y] Buscar  [+] Salir";
+        ? wutlang::Tr("[B] o tocar 'Cancelar' para detener   |   [HOME] Menu Wii U",
+                      "[B] or tap 'Cancel' to stop   |   [HOME] Wii U Menu")
+        : wutlang::Tr("[Arr/Abj] Elegir  [-/ZL] Marcar  [X] USB/Red  [L-Stick] Idioma  [R-Stick] Musica  [A] Instalar  [Y] Buscar  [+] Salir",
+                      "[Up/Dn] Select  [-/ZL] Mark  [X] USB/Net  [L-Stick] Lang  [R-Stick] Music  [A] Install  [Y] Scan  [+] Exit");
     ui.FillRect(0, 668, wutui::LOGICAL_W, 52, wutui::COL_FOOTER);
     ui.DrawTextCentered(0, 668, wutui::LOGICAL_W, 52, footerText, wutui::COL_MUTED, wutui::FontId::Small);
 
@@ -1735,8 +1795,8 @@ bool PollCancelAndRender(wutui::UiCanvas& ui,
     if (wantCancel) {
         if (!st.cancelling) {
             st.cancelling = true;
-            st.statusLine = "Cancelando...";
-            st.subStatusLine = "Deteniendo instalacion...";
+            st.statusLine = wutlang::Tr("Cancelando...", "Cancelling...");
+            st.subStatusLine = wutlang::Tr("Deteniendo instalacion...", "Stopping installation...");
             st.speedMBs = 0.0;
             PresentDoubleBuffered(ui, st);
             lastDrawTicks = OSGetSystemTime();
@@ -1770,8 +1830,10 @@ bool RunMcpInstallPhase(wutui::UiCanvas& ui,
                         OSTime& lastDrawTicks,
                         bool& outCancelled) {
     outCancelled = false;
-    st.statusLine = st.targetUsb ? "Instalando en Disco USB..." : "Instalando en Memoria Consola...";
-    st.subStatusLine = "Registrando juego en la consola...";
+    st.statusLine = st.targetUsb
+        ? wutlang::Tr("Instalando en Disco USB...", "Installing to USB Storage...")
+        : wutlang::Tr("Instalando en Memoria Consola...", "Installing to Console NAND...");
+    st.subStatusLine = wutlang::Tr("Registrando juego en la consola...", "Registering game on console...");
     st.speedMBs = 0.0;
     st.progress = baseProg;
     PresentDoubleBuffered(ui, st);
@@ -1779,7 +1841,8 @@ bool RunMcpInstallPhase(wutui::UiCanvas& ui,
 
     int32_t mcp = MCP_Open();
     if (mcp < 0) {
-        st.statusLine = "No se pudo iniciar el instalador del sistema.";
+        st.statusLine = wutlang::Tr("No se pudo iniciar el instalador del sistema.",
+                                    "Could not start system installer.");
         return false;
     }
 
@@ -1792,7 +1855,7 @@ bool RunMcpInstallPhase(wutui::UiCanvas& ui,
         if (infoBuf) MEMFreeToDefaultHeap(infoBuf);
         if (progBuf) MEMFreeToDefaultHeap(progBuf);
         MCP_Close(mcp);
-        st.statusLine = "Memoria insuficiente para instalar.";
+        st.statusLine = wutlang::Tr("Memoria insuficiente para instalar.", "Not enough memory to install.");
         return false;
     }
     std::memset(infoBuf, 0, sizeof(MCPInstallTitleInfo));
@@ -1889,10 +1952,10 @@ bool RunSinglePackageInstall(wutui::UiCanvas& ui,
     st.statusIsError = false;
     st.statusIsSuccess = false;
     st.statusLine = fromMtp
-        ? "Preparando copia desde Android..."
+        ? wutlang::Tr("Preparando copia desde Android...", "Preparing copy from Android...")
         : (fromUsb
-            ? "Preparando copia desde Memoria USB..."
-            : "Preparando descarga por Red...");
+            ? wutlang::Tr("Preparando copia desde Memoria USB...", "Preparing copy from USB Drive...")
+            : wutlang::Tr("Preparando descarga por Red...", "Preparing Network download..."));
     st.subStatusLine = pkgName;
     PresentDoubleBuffered(ui, st);
 
@@ -1906,8 +1969,8 @@ bool RunSinglePackageInstall(wutui::UiCanvas& ui,
     if (useFsa) {
         if (!st.mochaUnlocked || st.fsaHandle < 0) {
             st.statusIsError = true;
-            st.statusLine = "Modo directo no disponible.";
-            st.subStatusLine = "Cambia el metodo de copia con [L / R].";
+            st.statusLine = wutlang::Tr("Modo directo no disponible.", "Direct mode unavailable.");
+            st.subStatusLine = wutlang::Tr("Cambia el metodo de copia con [L / R].", "Change copy method with [L / R].");
             return false;
         }
         const uint64_t padUsb  = 64ULL * 1024 * 1024;
@@ -1917,7 +1980,7 @@ bool RunSinglePackageInstall(wutui::UiCanvas& ui,
         if (st.targetUsb) {
             if (!st.usbAvailable) {
                 st.statusIsError = true;
-                st.statusLine = "Disco USB de Wii U no conectado.";
+                st.statusLine = wutlang::Tr("Disco USB de Wii U no conectado.", "Wii U USB Storage not connected.");
                 return false;
             }
             if (st.usbFreeBytes >= pkgTotalBytes * 2 + padUsb) {
@@ -1926,8 +1989,9 @@ bool RunSinglePackageInstall(wutui::UiCanvas& ui,
                 stagingBase = "/vol/storage_mlc01/usr/tmp/wiiu_transfer";
             } else {
                 st.statusIsError = true;
-                st.statusLine = "Espacio insuficiente para copia directa.";
-                st.subStatusLine = "Cambia a 'Usando tarjeta SD temporal' con [L/R].";
+                st.statusLine = wutlang::Tr("Espacio insuficiente para copia directa.", "Not enough space for direct copy.");
+                st.subStatusLine = wutlang::Tr("Cambia a 'Usando tarjeta SD temporal' con [L/R].",
+                                               "Switch to 'Using temporary SD card' with [L/R].");
                 return false;
             }
         } else {
@@ -1937,8 +2001,9 @@ bool RunSinglePackageInstall(wutui::UiCanvas& ui,
                 stagingBase = "/vol/storage_mlc01/usr/tmp/wiiu_transfer";
             } else {
                 st.statusIsError = true;
-                st.statusLine = "Espacio insuficiente en la consola.";
-                st.subStatusLine = "Cambia a 'Usando tarjeta SD temporal' con [L/R].";
+                st.statusLine = wutlang::Tr("Espacio insuficiente en la consola.", "Not enough space on console.");
+                st.subStatusLine = wutlang::Tr("Cambia a 'Usando tarjeta SD temporal' con [L/R].",
+                                               "Switch to 'Using temporary SD card' with [L/R].");
                 return false;
             }
         }
@@ -1947,13 +2012,13 @@ bool RunSinglePackageInstall(wutui::UiCanvas& ui,
     } else {
         if (!st.sdMounted) {
             st.statusIsError = true;
-            st.statusLine = "Error: Tarjeta SD no detectada.";
+            st.statusLine = wutlang::Tr("Error: Tarjeta SD no detectada.", "Error: SD Card not detected.");
             return false;
         }
         if (pkgTotalBytes > 0 && st.sdFreeBytes < pkgTotalBytes + (16ULL * 1024 * 1024)) {
             st.statusIsError = true;
-            st.statusLine = "Espacio insuficiente en la Tarjeta SD.";
-            st.subStatusLine = "Necesita " + wutui::UiCanvas::FormatBytes(pkgTotalBytes);
+            st.statusLine = wutlang::Tr("Espacio insuficiente en la Tarjeta SD.", "Not enough space on SD Card.");
+            st.subStatusLine = std::string(wutlang::Tr("Necesita ", "Needs ")) + wutui::UiCanvas::FormatBytes(pkgTotalBytes);
             return false;
         }
         // Verificar tambien espacio libre en el destino final (Disco USB o Memoria Consola)
@@ -1962,19 +2027,19 @@ bool RunSinglePackageInstall(wutui::UiCanvas& ui,
             if (st.targetUsb) {
                 if (!st.usbAvailable) {
                     st.statusIsError = true;
-                    st.statusLine = "Disco USB de Wii U no conectado.";
+                    st.statusLine = wutlang::Tr("Disco USB de Wii U no conectado.", "Wii U USB Storage not connected.");
                     return false;
                 }
                 if (st.usbFreeBytes < pkgTotalBytes + (64ULL * 1024 * 1024)) {
                     st.statusIsError = true;
-                    st.statusLine = "Espacio insuficiente en Disco USB.";
-                    st.subStatusLine = "Necesita " + wutui::UiCanvas::FormatBytes(pkgTotalBytes);
+                    st.statusLine = wutlang::Tr("Espacio insuficiente en Disco USB.", "Not enough space on USB Storage.");
+                    st.subStatusLine = std::string(wutlang::Tr("Necesita ", "Needs ")) + wutui::UiCanvas::FormatBytes(pkgTotalBytes);
                     return false;
                 }
             } else if (st.nandFreeBytes < pkgTotalBytes + (128ULL * 1024 * 1024)) {
                 st.statusIsError = true;
-                st.statusLine = "Espacio insuficiente en Memoria Consola.";
-                st.subStatusLine = "Necesita " + wutui::UiCanvas::FormatBytes(pkgTotalBytes);
+                st.statusLine = wutlang::Tr("Espacio insuficiente en Memoria Consola.", "Not enough space on Console NAND.");
+                st.subStatusLine = std::string(wutlang::Tr("Necesita ", "Needs ")) + wutui::UiCanvas::FormatBytes(pkgTotalBytes);
                 return false;
             }
         }
@@ -2161,7 +2226,11 @@ bool RunSinglePackageInstall(wutui::UiCanvas& ui,
             }
         }
 
-        const char* prefix = fromMtp ? "Copiando de Android (" : (fromUsb ? "Copiando de Memoria USB (" : "Recibiendo por Red (");
+        const char* prefix = fromMtp
+            ? wutlang::Tr("Copiando de Android (", "Copying from Android (")
+            : (fromUsb
+                ? wutlang::Tr("Copiando de Memoria USB (", "Copying from USB Drive (")
+                : wutlang::Tr("Recibiendo por Red (", "Receiving via Network ("));
         st.statusLine = std::string(prefix) +
                         std::to_string(fi + 1) + "/" + std::to_string(fileCount) + ") " + pkgName;
         st.subStatusLine = subPath;
@@ -2447,24 +2516,33 @@ void RunInstallQueue(wutui::UiCanvas& ui, AppState& st, InputManager& input) {
         st.statusIsError = false;
         st.statusIsSuccess = true;
         if (totalQ > 1) {
-            st.statusLine = "Se instalaron " + std::to_string(installedOk) + " de " + std::to_string(totalQ) + " juegos!";
+            st.statusLine = std::string(wutlang::Tr("Se instalaron ", "Installed ")) +
+                            std::to_string(installedOk) + wutlang::Tr(" de ", " of ") +
+                            std::to_string(totalQ) + wutlang::Tr(" juegos!", " games!");
         } else if (fromMtp) {
-            st.statusLine = "Juego instalado desde tu Android!";
+            st.statusLine = wutlang::Tr("Juego instalado desde tu Android!", "Game installed from Android!");
         } else if (fromUsb) {
-            st.statusLine = "Juego instalado desde Memoria USB!";
+            st.statusLine = wutlang::Tr("Juego instalado desde Memoria USB!", "Game installed from USB Drive!");
         } else {
-            st.statusLine = "Juego instalado correctamente!";
+            st.statusLine = wutlang::Tr("Juego instalado correctamente!", "Game installed successfully!");
         }
         st.subStatusLine = fromUsb
-            ? "Retira la memoria USB antes de salir al Menu Wii U."
-            : (st.targetUsb ? "Guardado en Disco USB." : "Guardado en Memoria Consola.");
+            ? wutlang::Tr("Retira la memoria USB antes de salir al Menu Wii U.",
+                          "Unplug the USB Drive before exiting to Wii U Menu.")
+            : (st.targetUsb
+                ? wutlang::Tr("Guardado en Disco USB.", "Saved to USB Storage.")
+                : wutlang::Tr("Guardado en Memoria Consola.", "Saved to Console NAND."));
     } else if (!cancelled && hadError && installedOk > 0 && totalQ > 1) {
         st.progress = 1.0f;
         st.statusIsError = false;
         st.statusIsSuccess = true;
-        st.statusLine = "Instalados " + std::to_string(installedOk) + " de " + std::to_string(totalQ) +
-                        " (" + std::to_string(failedCount) + " omitido).";
-        st.subStatusLine = !lastErrLine.empty() ? lastErrLine : "Los juegos con error quedaron marcados.";
+        st.statusLine = std::string(wutlang::Tr("Instalados ", "Installed ")) +
+                        std::to_string(installedOk) + wutlang::Tr(" de ", " of ") +
+                        std::to_string(totalQ) + " (" + std::to_string(failedCount) +
+                        wutlang::Tr(" omitido).", " skipped).");
+        st.subStatusLine = !lastErrLine.empty()
+            ? lastErrLine
+            : wutlang::Tr("Los juegos con error quedaron marcados.", "Failed games remain marked.");
     } else if (!cancelled && hadError && !lastErrLine.empty()) {
         st.statusIsError = true;
         st.statusIsSuccess = false;
@@ -2475,13 +2553,16 @@ void RunInstallQueue(wutui::UiCanvas& ui, AppState& st, InputManager& input) {
         st.statusIsError = false;
         st.statusIsSuccess = false;
         if (totalQ > 1) {
-            st.statusLine = "Instalacion cancelada (" + std::to_string(installedOk) + "/" + std::to_string(totalQ) + " listos).";
+            st.statusLine = std::string(wutlang::Tr("Instalacion cancelada (", "Installation cancelled (")) +
+                            std::to_string(installedOk) + "/" + std::to_string(totalQ) +
+                            wutlang::Tr(" listos).", " done).");
         } else {
-            st.statusLine = "Instalacion cancelada.";
+            st.statusLine = wutlang::Tr("Instalacion cancelada.", "Installation cancelled.");
         }
         st.subStatusLine = fromUsb
-            ? "Archivos temporales borrados. Retira la memoria USB al salir."
-            : "Archivos temporales borrados.";
+            ? wutlang::Tr("Archivos temporales borrados. Retira la memoria USB al salir.",
+                          "Temp files cleaned. Unplug the USB Drive before exiting.")
+            : wutlang::Tr("Archivos temporales borrados.", "Temporary files cleaned.");
     } else {
         st.statusIsError = true;
         st.statusIsSuccess = false;
@@ -2496,10 +2577,10 @@ void HandleTouch(int x,
                  PkgSource& targetSource,
                  bool& triggerInstall,
                  bool& dirty) {
-    // Header: Selector Modo USB | Modo Red (x=532..876, y<=96)
-    if (y <= 96 && x >= 532 && x <= 876) {
+    // Header: Selector Modo USB | Modo Red (x=504..812, y<=96)
+    if (y <= 96 && x >= 504 && x <= 812) {
         bool currentlyUsb = (st.source != PkgSource::NetworkPc);
-        bool wantUsb = (x < 704);
+        bool wantUsb = (x < 658);
         if (wantUsb != currentlyUsb) {
             targetSource = wantUsb
                 ? (st.mtpConnected && !st.usbFatConnected ? PkgSource::AndroidMtp : PkgSource::UsbFat)
@@ -2508,16 +2589,22 @@ void HandleTouch(int x,
         }
         return;
     }
-    // Header: Botón Musica SI/NO (x=884..1024, y<=96)
-    if (y <= 96 && x >= 884 && x <= 1024) {
+    // Header: Botón Musica SI/NO (x=814..934, y<=96)
+    if (y <= 96 && x >= 814 && x <= 934) {
         if (gAudioMgr) {
             gAudioMgr->ToggleMuted();
             dirty = true;
         }
         return;
     }
-    // Pill header derecha (Buscar Memoria USB / Android / Red) (x>=1030, y<=96)
-    if (x >= 1030 && y <= 96) {
+    // Header: Botón Idioma ES/EN (x=936..1030, y<=96)
+    if (y <= 96 && x >= 936 && x <= 1030) {
+        wutlang::ToggleLanguage();
+        dirty = true;
+        return;
+    }
+    // Pill header derecha (Buscar Memoria USB / Android / Red) (x>=1034, y<=96)
+    if (x >= 1034 && y <= 96) {
         triggerScan = true;
         return;
     }
@@ -2794,7 +2881,7 @@ public:
                 ssize_t n = recvfrom(udpSock_, buf, sizeof(buf) - 1, 0,
                                      reinterpret_cast<sockaddr*>(&from), &fromLen);
                 if (n > 0 && std::strncmp(buf, "WIIU_FIND_CONSOLE", 17) == 0) {
-                    const char* reply = "WIIU_CONSOLE_HERE|2.0.3";
+                    const char* reply = "WIIU_CONSOLE_HERE|2.0.4";
                     sendto(udpSock_, reply, std::strlen(reply), 0,
                            reinterpret_cast<sockaddr*>(&from), fromLen);
                 }
@@ -2924,6 +3011,7 @@ int main() {
 
     AppState st;
     bool sdMountedByUs = (WHBMountSdCard() != FALSE);
+    wutlang::InitLanguage();
     ReconcileSdSelfUpdateOnBoot();
 
     // Inicializar audio solo con Tema de Fondo (sin sonido de Pantalla Inicio)
@@ -2932,32 +3020,23 @@ int main() {
     gAudioMgr = &audio;
     audio.LoadBgm();
 
-    // Inicializar Mocha, USB y Red
+    // Inicializar Mocha y arrancar por defecto en Modo USB (sin saltar a Modo Red)
     InitMochaFsa(st);
     UpdateAllFreeSpace(st);
+    st.source = PkgSource::UsbFat;
     bool foundUsbOnBoot = ScanUnifiedUsb(st);
-    bool foundPcOnBoot = false;
-    if (!foundUsbOnBoot) {
-        st.source = PkgSource::NetworkPc;
-        st.statusIsError = false;
-        foundPcOnBoot = DiscoverServer(st);
-        if (foundPcOnBoot) {
-            FetchPackageList(st);
-        }
-    }
 
     // Pasar directo a la interfaz principal y comenzar a reproducir "Tema de Fondo" en bucle
     audio.StartBgm();
 
-    if (foundUsbOnBoot) {
-        // ScanUnifiedUsb ya configuró el mensaje de Memoria USB o Android conectado
-    } else if (foundPcOnBoot) {
-        st.statusLine = "Conectado por Red a " + st.serverHost;
-        st.subStatusLine = std::to_string(st.pkgs.size()) + " juego(s) listo(s) para instalar.";
-        st.statusIsSuccess = true;
-    } else {
-        st.statusLine = "Listo. Elige Modo USB o Modo Red con [X].";
-        st.subStatusLine = "Pulsa [Y] para buscar juegos en USB o en Red.";
+    if (!foundUsbOnBoot) {
+        st.source = PkgSource::UsbFat;
+        st.statusIsError = false;
+        st.statusIsSuccess = false;
+        st.statusLine = wutlang::Tr("Modo USB listo. Conecta Memoria USB o Android.",
+                                    "USB Mode ready. Connect USB Drive or Android.");
+        st.subStatusLine = wutlang::Tr("Pulsa [Y] para buscar o [X] para Modo Red.",
+                                       "Press [Y] to scan or [X] for Network Mode.");
     }
     PresentDoubleBuffered(ui, st);
     input.Flush();
@@ -2995,6 +3074,10 @@ int main() {
 
             if (in.triggered & ACT_MUTE) {
                 audio.ToggleMuted();
+                dirty = true;
+            }
+            if (in.triggered & ACT_LANG) {
+                wutlang::ToggleLanguage();
                 dirty = true;
             }
 
@@ -3070,15 +3153,18 @@ int main() {
                 st.statusIsError = false;
                 st.statusIsSuccess = st.ActiveSourceConnected();
                 if (st.source == PkgSource::UsbFat) {
-                    st.statusLine = std::string("Memoria USB detectada (") + st.usbFat.FsName() + ")";
-                    st.subStatusLine = std::to_string(st.usbPkgs.size()) + " juego(s) listo(s) para instalar.";
+                    st.statusLine = std::string(wutlang::Tr("Memoria USB detectada (", "USB Drive detected (")) + st.usbFat.FsName() + ")";
+                    st.subStatusLine = std::to_string(st.usbPkgs.size()) +
+                                       wutlang::Tr(" juego(s) listo(s) para instalar.", " game(s) ready to install.");
                 } else if (st.source == PkgSource::AndroidMtp) {
-                    st.statusLine = "Android conectado (" + st.mtpDeviceName + ")";
-                    st.subStatusLine = std::to_string(st.mtpPkgs.size()) + " juego(s) listo(s) para instalar.";
+                    st.statusLine = std::string(wutlang::Tr("Android conectado (", "Android connected (")) + st.mtpDeviceName + ")";
+                    st.subStatusLine = std::to_string(st.mtpPkgs.size()) +
+                                       wutlang::Tr(" juego(s) listo(s) para instalar.", " game(s) ready to install.");
                 } else {
                     st.statusLine = st.connected
-                        ? ("Conectado por Red a " + st.serverHost)
-                        : "Sin conexion de Red. Pulsa [Y] para buscar.";
+                        ? (std::string(wutlang::Tr("Conectado por Red a ", "Connected over Network to ")) + st.serverHost)
+                        : wutlang::Tr("Sin conexion de Red. Pulsa [Y] para buscar.",
+                                      "No Network connection. Press [Y] to scan.");
                     st.subStatusLine.clear();
                 }
             }
@@ -3089,23 +3175,28 @@ int main() {
             st.statusIsError = false;
             st.statusIsSuccess = false;
             if (st.source != PkgSource::NetworkPc) {
-                st.statusLine = "Buscando Memoria USB o Android...";
-                st.subStatusLine = "Detectando exFAT, FAT32, NTFS, FAT o Android...";
+                st.statusLine = wutlang::Tr("Buscando Memoria USB o Android...", "Scanning for USB Drive or Android...");
+                st.subStatusLine = wutlang::Tr("Detectando exFAT, FAT32, NTFS, FAT o Android...",
+                                               "Detecting exFAT, FAT32, NTFS, FAT or Android...");
                 PresentDoubleBuffered(ui, st);
                 ScanUnifiedUsb(st);
             } else {
-                st.statusLine = "Buscando juegos en Red (PC o Android)...";
+                st.statusLine = wutlang::Tr("Buscando juegos en Red (PC o Android)...",
+                                            "Scanning for Network games (PC or Android)...");
                 st.subStatusLine.clear();
                 PresentDoubleBuffered(ui, st);
                 if (DiscoverServer(st)) {
                     FetchPackageList(st);
                     st.statusIsSuccess = true;
-                    st.statusLine = "Conectado por Red a " + st.serverHost;
-                    st.subStatusLine = std::to_string(st.pkgs.size()) + " juego(s) encontrado(s).";
+                    st.statusLine = std::string(wutlang::Tr("Conectado por Red a ", "Connected over Network to ")) + st.serverHost;
+                    st.subStatusLine = std::to_string(st.pkgs.size()) +
+                                       wutlang::Tr(" juego(s) encontrado(s).", " game(s) found.");
                 } else {
                     st.statusIsError = true;
-                    st.statusLine = "No se encontro PC ni Android en la Red.";
-                    st.subStatusLine = "Abre el programa en tu PC o App en tu Android.";
+                    st.statusLine = wutlang::Tr("No se encontro PC ni Android en la Red.",
+                                                "No PC or Android server found on Network.");
+                    st.subStatusLine = wutlang::Tr("Abre el programa en tu PC o App en tu Android.",
+                                                   "Open the PC program or Android App.");
                 }
             }
             input.Flush();
