@@ -1,7 +1,11 @@
 # Wii U Transfer Tools
 
 <p align="center">
-  <a href="README.md">🇪🇸 Español</a> &nbsp;|&nbsp; <b>🇺🇸 English</b>
+  <a href="README.md"><img src="https://img.shields.io/badge/Idioma-Espa%C3%B1ol-1F2937?style=for-the-badge" alt="Español"></a>
+  &nbsp;
+  <a href="README_EN.md"><img src="https://img.shields.io/badge/Language-English-00AEEF?style=for-the-badge" alt="English"></a>
+  &nbsp;
+  <a href="https://github.com/supermafari007/WiiU-Transfer-Tools/releases/latest"><img src="https://img.shields.io/badge/Version-v2.0.4-17A95B?style=for-the-badge" alt="v2.0.4"></a>
 </p>
 
 <p align="center">
@@ -18,13 +22,13 @@ This project is **open-source software licensed under the MIT License**. See [LI
 
 ## Preview
 
-| Wii U Console (`USB Mode` / `Net Mode`) | Windows PC App |
+| Wii U Console (`USB Mode` / `Net Mode`) | USB Drive Mode (`exFAT`/`NTFS`/`FAT32`) |
 |:---:|:---:|
-| ![Wii U Transfer Tools on TV and GamePad](Imagenes/1_WiiU_Transfer_Tools_consola.png) | ![Wii U Transfer Tools PC App](Imagenes/2_WiiU_Transfer_Tools_PC.png) |
+| ![Wii U Transfer Tools on TV and GamePad](Imagenes/1_WiiU_Transfer_Tools_consola.png) | ![Wii U Transfer Tools USB Drive](Imagenes/7_WiiU_Transfer_Tools_USB.png) |
 
-<p align="center">
-  <img src="Imagenes/6_WiiU_Transfer_Tools_Android_MTP.png" alt="Wii U Transfer Tools for Android 9+" width="820">
-</p>
+| Windows PC App | Android 9+ App (Direct USB AOA & Wi-Fi) |
+|:---:|:---:|
+| ![Wii U Transfer Tools PC App](Imagenes/2_WiiU_Transfer_Tools_PC.png) | ![Wii U Transfer Tools for Android 9+](Imagenes/6_WiiU_Transfer_Tools_Android_MTP.png) |
 
 ## Download Version 2.0.4
 
